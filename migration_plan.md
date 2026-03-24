@@ -73,13 +73,15 @@ The API must never leak the physical database design or silently shift consisten
 The CodeIgniter 4 query builder ensures InnoDB is protected from runaway materialize operations.
 
 *   **Tenant Isolation**: Secure all `INNER JOIN` conditions by enforcing `tenant_id` matches across all pages.
-*   **Protected Late Row Lookups**: Utilizes Common Table Expressions (CTEs) to isolate the initial filter during cross-page queries. The query executor must verify via `EXPLAIN ANALYZE` that the CTE is materialized (not inlined by the optimizer) before relying on it as an intermediate bound. If the optimizer inlines the CTE, the circuit breaker's row-count check occurs *after* the full join, defeating its purpose. In that case, the executor falls back to a two-query approach (count first via a lightweight ID-only query, then fetch) to guarantee bounded execution.
+*   **Deterministic Late Row Lookups (Two-Query Approach)**: Cross-page queries and complex filters must never be executed as a single, potentially unbound `INNER JOIN`. To guarantee bounded execution and prevent disk spillage, the executor enforces a strict two-step process:
+    1.  **Query 1 (Lightweight Probe)**: Execute the filter condition as a standalone query selecting *only* `id` using covering indexes, appended with `LIMIT {max_intermediate_rows} + 1`. This is cheap and immune to optimizer inlining issues.
+    2.  **Query 2 (Bounded Fetch)**: If Query 1 yields a count within the allowed threshold, use the resulting array of IDs to fetch the full row payloads via a safe `WHERE id IN (...)` clause with any necessary joins.
 
 ### 4.1 Configurable Circuit Breaker
 
-Before performing the final self-join, the execution engine evaluates the intermediate ID count.
+Before performing the wide fetch (Query 2), the execution engine evaluates the result count of the lightweight probe (Query 1).
 
-*   **Threshold Trigger**: If the filter yields more rows than `stardust.query.max_intermediate_rows` (default: `50000`), a Circuit Breaker exception is thrown.
+*   **Threshold Trigger**: If Query 1 yields more rows than `stardust.query.max_intermediate_rows` (default: `50000`), the query is aborted on the MySQL side, and a Circuit Breaker exception is thrown.
 *   **Gateway Handling**: As defined in Section 3, the API Controller catches this exception and proxies the request to the Search Layer.
 *   **Hard Failure Fallback**: If the proxying fails (e.g., the Search infrastructure is completely offline, returns a non-2xx, or exceeds the proxy timeout), the API must **abort** and return an **HTTP 422 Unprocessable Entity** (Payload is syntactically valid but exceeds operational limits) with a specific application code: `{"code": "ERR_TOO_MANY_MATCHES", "message": "Query exceeded maximum internal bounds. Please narrow your filters."}`.
 
