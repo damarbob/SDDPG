@@ -15,7 +15,8 @@ SDDPG serves as the canonical reference for architectural decisions, migration s
 
 | Document | Description |
 |---|---|
-| [`migration_plan.md`](migration_plan.md) | Vertical Schema Partitioning migration plan — covers schema design, API contract, read/write paths, circuit breaker, dual-write migration strategy, and rollback protocol. |
+| [`migration_plan.md`](migration_plan.md) | Vertical Schema Partitioning architecture plan — covers schema design, API contract, read/write paths, and bounded query circuit breakers. |
+| [`legacy_data_migration.md`](legacy_data_migration.md) | Operational playbook for migrating historical data — covers asynchronous dual-writes, dead letter queues, backfill pumps, and cutover protocols. |
 
 ## Planned Contents
 
@@ -35,6 +36,7 @@ SDDPG serves as the canonical reference for architectural decisions, migration s
 SDDPG/
 ├── README.md
 ├── migration_plan.md
+├── legacy_data_migration.md
 ├── adrs/               # Architecture Decision Records
 ├── schemas/            # ERD, schema diagrams
 ├── api/                # API contract docs
