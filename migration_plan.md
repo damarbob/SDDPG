@@ -22,8 +22,12 @@ MySQL is treated strictly as a transactional store, not a catch-all search engin
     *   `model_id` (INT)
     *   `created_at`, `updated_at`, `deleted_at` (DATETIME, System timestamps)
     *   `fields` (JSON, Complete unindexed payload)
-    *   `is_desynced` (TINYINT(1), Default 0) - Indicates if the extension table write was skipped due to full capacity.
-    *   *Indexes*: `(tenant_id, model_id)`, `(tenant_id, deleted_at, created_at)`, `(is_desynced)`
+    *   *Indexes*: `(tenant_id, model_id)`, `(tenant_id, deleted_at, created_at)`
+*   **`stardust_sync_queue` (Ephemeral Operations Queue)**
+    *   `id` (BIGINT, Primary Key)
+    *   `entry_id` (BIGINT)
+    *   `created_at` (DATETIME)
+    *   *Role*: A tiny, dedicated table exclusively for queuing writes that failed due to extension capacity constraints. Polled by `SELECT ... FOR UPDATE SKIP LOCKED`.
 *   **`entry_slots_page_X` (1:1 Extension Tables)**
     *   `entry_id` (BIGINT, Primary Key / Foreign Key `ON DELETE CASCADE`)
     *   `tenant_id` (BIGINT)
@@ -40,17 +44,17 @@ A background daemon monitors global slot consumption and provisions new extensio
 *   **Safeguards**: Employs Empty-Table-Only DDL, Advisory Locking (`GET_LOCK('stardust_page_provision', 10)`), and Atomic Registry Updates to prevent metadata lock contention. `ALTER TABLE` on populated pages via daemon is strictly forbidden.
 *   **⚠️ Exhaustion Fallback (Resilience)**: If the provisioning daemon fails and slot capacity reaches 100%, high-throughput ingestion **must not block or drop writes**.
     *   The payload splitting engine will gracefully degrade.
-    *   It writes the full JSON payload into the `entry_data` table, skips writing to the `entry_slots_page_X` table, and sets `is_desynced = 1`.
-    *   A background reconciler cron job continuously monitors for `is_desynced = 1`. Once a new page is provisioned by operators, the reconciler processes these flagged rows, aligns them into the new table, and clears the flag.
-    *   **Reconciler Backpressure**: The reconciler **must** be cursor-based: `WHERE is_desynced = 1 ORDER BY id ASC LIMIT {chunk_size}` (configurable, default: `500`). It processes in configurable chunks with a configurable delay between chunks to prevent write spikes against the extension table during recovery. It reports throughput metrics to stdout (rows processed / elapsed time). This mirrors the backfill pump architecture in §6.3.
+    *   It writes the full JSON payload into the `entry_data` table and skips writing to the `entry_slots_page_X` table. The failed operation ID is written into the `stardust_sync_queue` table.
+    *   **Persistent Queue Daemon**: A background PHP daemon continuously polls the `stardust_sync_queue` utilizing `SELECT ... FOR UPDATE SKIP LOCKED` to concurrently claim tasks without metadata lock contention on the main ingestion thread.
+    *   **Reconciler Backpressure**: Once a new page is provisioned, the daemon aligns the pending entries into the new extension table and deletes the queue rows. It processes in configurable chunks (default: `500`) with a configurable delay between chunks to prevent write spikes against the extension table during recovery. The daemon reports throughput metrics to stdout (rows processed / elapsed time).
 
 ### 2.2 Index Provisioning Policy
 
 Indexing decisions are **schema-driven**, governed by the `is_filterable` metadata flag set at model-field registration time.
 
 *   If `is_filterable = true` → a composite B-tree index `(tenant_id, slot_column)` is included in the page DDL at provisioning time.
-*   If `is_filterable = false` → the slot is used for discrete retrieval only. Queries filtering against non-filterable fields are routed to `JSON_EXTRACT(fields, '$.propertyName')` for small result sets, or to the Search Layer for arbitrary reporting.
-*   This ensures index provisioning is a deterministic, auditable decision tied to the schema registry, not operator judgment.
+*   If `is_filterable = false` → the slot is used for discrete retrieval only. **Filters against non-filterable fields are strictly forbidden.** To maintain low latency, MySQL will never evaluate `JSON_EXTRACT` inside a `WHERE` clause. If a consumer attempts to filter on an unindexed field, the API will strictly reject the request with an **HTTP 400 Bad Request**. No fallback or suggestions for in-memory bulk filtering will be provided, forcing the consumer to request proper schema provisioning if the filter is a genuine business requirement.
+*   This ensures index provisioning is a deterministic, auditable decision tied to the schema registry.
 
 ---
 
@@ -58,32 +62,38 @@ Indexing decisions are **schema-driven**, governed by the `is_filterable` metada
 
 The API must never leak the physical database design or silently shift consistency models without explicit headers.
 
-*   **Unified Routing & Gateway Proxying**:
-    *   Consumers exclusively use `/api/entries`.
-    *   If the requested filters are simple (e.g., maximum of 2 `entry_slots_page_X` joins) and the match count is low, the Database Engine synchronously returns the payload (Strict Consistency).
-    *   If the query is highly complex or hits the **Circuit Breaker** (see Section 4), the API Gateway **automatically proxies** the exact request parameters to the backend Search Service (e.g., OpenSearch / `/api/search/entries`).
-    *   When proxying, the Gateway appends an `X-Consistency-Model: Eventual` header to the response, informing the consumer of the slight replication delay without breaking frontend integration.
-    *   **Proxy Timeout & Error Normalization**: The gateway enforces a hard timeout of `stardust.gateway.proxy_timeout_ms` (default: `5000`). Any non-2xx response **or** timeout from the Search Layer is treated identically to a hard failure — the gateway returns the 422 `ERR_TOO_MANY_MATCHES` response defined in §4.1. The gateway must **never** forward a raw upstream error to the consumer. Upstream failures are logged internally for operators.
-*   **Seamless Field Selection**: Consumers request fields logically using standard query parameters (e.g., `?select=firstName,jobId`). The system dynamically determines if a field requires an `INNER JOIN` against an extension table or a `JSON_EXTRACT(fields, '$.propertyName')` from the core payload, automatically merging the final representation.
+*   **API Purity & Predictability**:
+    *   Consumers use `/api/entries` for standard synchronous data retrieval.
+    *   To minimize the maintenance layer, relying on external 3rd-party services (like OpenSearch) is strongly discouraged. As a standalone engine, StarDust does not perform transparent proxying or dynamic shifts to eventual consistency.
+    *   To support scale without breaking the consumer contract, `/api/entries` mandates **Cursor-Based Pagination**. The system never evaluates the total matched set of a query; it only evaluates the requested page (e.g., `LIMIT 50`). This ensures valid business queries are never arbitrarily rejected with 422 errors simply because the result set grew over time.
+    *   If a synchronous query scans an excessively large amount of rows without a proper index limit, it will trip the **Scanned Row Circuit Breaker** (see Section 4).
+*   **Seamless Field Selection**: Consumers request fields logically using standard query parameters (e.g., `?select=firstName,jobId`). The system dynamically determines if a field requires an `INNER JOIN` against an extension table or a `JSON_EXTRACT(fields, '$.propertyName')` from the core payload on retrieval (select only, never for filtering), automatically merging the final representation.
 
 ---
 
 ## 4. The Read Path: Bounded Query Execution
 
-The CodeIgniter 4 query builder ensures InnoDB is protected from runaway materialize operations.
+The CodeIgniter 4 query builder ensures InnoDB is protected from runaway materialize operations without punishing consumers for large datasets.
 
 *   **Tenant Isolation**: Secure all `INNER JOIN` conditions by enforcing `tenant_id` matches across all pages.
 *   **Deterministic Late Row Lookups (Two-Query Approach)**: Cross-page queries and complex filters must never be executed as a single, potentially unbound `INNER JOIN`. To guarantee bounded execution and prevent disk spillage, the executor enforces a strict two-step process:
-    1.  **Query 1 (Lightweight Probe)**: Execute the filter condition as a standalone query selecting *only* `id` using covering indexes, appended with `LIMIT {max_intermediate_rows} + 1`. This is cheap and immune to optimizer inlining issues.
-    2.  **Query 2 (Bounded Fetch)**: If Query 1 yields a count within the allowed threshold, use the resulting array of IDs to fetch the full row payloads via a safe `WHERE id IN (...)` clause with any necessary joins.
+    1.  **Query 1 (Paginated Probe)**: Execute the filter condition as a standalone query selecting *only* `id` using covering indexes, bounding the query using standard cursor logic: `WHERE id > :cursor ORDER BY id ASC LIMIT {page_size} + 1`. This determines if a next page exists while maintaining a constant, tiny memory footprint regardless of total matched rows.
+    2.  **Query 2 (Bounded Fetch)**: Use the resulting array of IDs (up to `page_size`) to fetch the full row payloads via a safe `WHERE id IN (...)` clause with any necessary joins.
 
-### 4.1 Configurable Circuit Breaker
+### 4.1 Scanned Row Circuit Breaker
 
-Before performing the wide fetch (Query 2), the execution engine evaluates the result count of the lightweight probe (Query 1).
+The read path utilizes a circuit breaker, changing its focus from "punishing large match counts" to "preventing unindexed table scans."
 
-*   **Threshold Trigger**: If Query 1 yields more rows than `stardust.query.max_intermediate_rows` (default: `50000`), the query is aborted on the MySQL side, and a Circuit Breaker exception is thrown.
-*   **Gateway Handling**: As defined in Section 3, the API Controller catches this exception and proxies the request to the Search Layer.
-*   **Hard Failure Fallback**: If the proxying fails (e.g., the Search infrastructure is completely offline, returns a non-2xx, or exceeds the proxy timeout), the API must **abort** and return an **HTTP 422 Unprocessable Entity** (Payload is syntactically valid but exceeds operational limits) with a specific application code: `{"code": "ERR_TOO_MANY_MATCHES", "message": "Query exceeded maximum internal bounds. Please narrow your filters."}`.
+*   **Threshold Trigger**: Rather than tripping on the number of returned matches, the system evaluates internal limits or tracked metrics to ensure the number of *scanned rows* does not exceed a hard threshold.
+*   **Hard Failure Fallback**: If a query is poorly formed (e.g., forcing a massive scan despite indices), the framework aborts the request and returns an **HTTP 400 Bad Request** outlining that the query is non-performant. It does *not* throw 422 errors for queries that successfully use an index but happen to match many rows.
+
+### 4.2 Asynchronous Exports (Massive Data Retrieval)
+
+To maintain the strict synchronous page limits on `/api/entries` without abandoning consumers who genuinely need massive datasets, StarDust introduces a dedicated export pattern.
+
+*   **The `/api/exports` Endpoint**: A consumer posts a large query filter to `/api/exports`. The API accepts the payload, validates the query, and responds immediately with a `202 Accepted` and an export Job ID.
+*   **Background Materialization**: A PHP daemon (akin to the sync queue) picks up the export job. It seamlessly pages through the database using the same Cursor-Based Pagination described above (Query 1 and Query 2 in a loop) and writes the output locally to a streaming CSV or JSON file on disk.
+*   **Result Delivery**: Once complete, the consumer can poll the job status and receive a downloaded artifact. This keeps the database safe from massive single-query memory spikes while delivering "the best service" by not forcing clients off the platform for reporting.
 
 ---
 
