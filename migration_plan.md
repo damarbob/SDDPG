@@ -5,10 +5,10 @@ This document outlines the strategic plan for migrating StarDust from the curren
 ## 1. Objectives
 
 - **Architectural Shift**: Move from single-table virtual columns to a 1:1 extension table strategy (`entry_data` + `entry_slots_page_X`), optimized strictly as a high-throughput ingestion and discrete retrieval engine.
-- **Scale Without Spillage**: Ensure MySQL query execution is tightly bounded via a configurable circuit breaker, preventing disk spillage of temporary tables by seamlessly offloading arbitrary reporting to an asynchronous search layer.
-- **Stable Consumer Contract**: Provide explicit, deterministic API endpoints that gracefully handle scale without forcing clients to write brittle fallback logic.
-- **Decoupled Migration**: Structure the migration with an asynchronous Dual-Write strategy using causally ordered event streams, completely decoupling the legacy system's uptime from the new schema's experimental stability.
-- **Operational Resilience**: Provide quantifiable cutover criteria, idempotent data pipelines, guaranteed data integrity under degraded states, and instant rollback capability.
+- **Strict Resource Bounding**: Ensure MySQL query execution is tightly bounded via a configurable circuit breaker and strictly enforced schema indexing, preventing disk spillage of temporary tables without relying on external 3rd-party search infrastructure.
+- **Stable Consumer Contract**: Provide explicit, deterministic API endpoints. The system will gracefully reject unoptimized queries (e.g., filtering on unindexed fields) with a `400 Bad Request` rather than silently degrading database performance.
+- **Extensible Search Architecture (Adapter Pattern)**: Ship the core system as a purely standalone, zero-dependency relational engine to minimize the infrastructural barrier to entry. Future integration with dedicated search engines (e.g., Meilisearch, OpenSearch) is facilitated through an open Driver/Adapter interface at the CodeIgniter 4 application layer.
+- **Operational Resilience**: Guarantee data integrity under degraded states (e.g., slot exhaustion) through a robust fallback queue (`stardust_sync_queue`) and idempotent background reconciliation daemons.
 
 ---
 
@@ -32,7 +32,7 @@ MySQL is treated strictly as a transactional store, not a catch-all search engin
   - `entry_id` (BIGINT, Primary Key / Foreign Key `ON DELETE CASCADE`)
   - `tenant_id` (BIGINT)
   - `i_str_01`...`i_str_25` (VARCHAR), `i_int_01`...`i_int_15` (BIGINT), `i_num_01`...`i_num_10` (DOUBLE), `i_dt_01`...`i_dt_10` (DATETIME)
-  - **⚠️ Selective Indexing**: Indexes are governed by the Index Provisioning Policy (§2.2). Arbitrary reporting is offloaded to the search infrastructure.
+  - **⚠️ Selective Indexing**: Indexes are governed by the Index Provisioning Policy (§2.2).
 
 > [!NOTE]
 > **Slot Layout Change from Original Analysis:** v6 intentionally revised the per-page slot distribution from the original analysis (`i_str_30`, `i_num_20`, `i_dt_10`) to include a dedicated integer type: `i_str_25`, `i_int_15`, `i_num_10`, `i_dt_10`. Rationale: foreign-key lookups and enum-coded fields benefit from native `BIGINT` indexing over `DOUBLE` casting.
@@ -62,6 +62,10 @@ Indexing decisions are **schema-driven**, governed by the `is_filterable` metada
 
 The API must never leak the physical database design or silently shift consistency models without explicit headers.
 
+- **Driver-Based Architecture**:
+  - To keep the maintenance layer minimal, StarDust uses a standard `EntrySearchInterface`.
+  - The default driver is the **MySQL Native Driver**, which enforces the strict indexing rules defined in Section 2.2.
+  - If future enterprise clients require arbitrary reporting or full-text search, developers can inject a 3rd-party driver (e.g., `MeilisearchDriver`) without altering the core ingestion engine.
 - **API Purity & Predictability**:
   - Consumers use `/api/entries` for standard synchronous data retrieval.
   - To minimize the maintenance layer, relying on external 3rd-party services (like OpenSearch) is strongly discouraged. As a standalone engine, StarDust does not perform transparent proxying or dynamic shifts to eventual consistency.
