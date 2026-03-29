@@ -34,9 +34,6 @@ MySQL is treated strictly as a transactional store, not a catch-all search engin
   - `i_str_01`...`i_str_25` (VARCHAR), `i_int_01`...`i_int_15` (BIGINT), `i_num_01`...`i_num_10` (DOUBLE), `i_dt_01`...`i_dt_10` (DATETIME)
   - **⚠️ Selective Indexing**: Indexes are governed by the Index Provisioning Policy (§2.2).
 
-> [!NOTE]
-> **Slot Layout Change from Original Analysis:** v6 intentionally revised the per-page slot distribution from the original analysis (`i_str_30`, `i_num_20`, `i_dt_10`) to include a dedicated integer type: `i_str_25`, `i_int_15`, `i_num_10`, `i_dt_10`. Rationale: foreign-key lookups and enum-coded fields benefit from native `BIGINT` indexing over `DOUBLE` casting.
-
 ### 2.1 Automated Page Provisioning & Exhaustion Fallback
 
 A background daemon monitors global slot consumption and provisions new extension pages when capacity drops below 20%.
