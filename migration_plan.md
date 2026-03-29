@@ -84,12 +84,13 @@ The CodeIgniter 4 query builder ensures InnoDB is protected from runaway materia
   1.  **Query 1 (Paginated Probe)**: Execute the filter condition as a standalone query selecting _only_ `id` using covering indexes, bounding the query using standard cursor logic: `WHERE id > :cursor ORDER BY id ASC LIMIT {page_size} + 1`. This determines if a next page exists while maintaining a constant, tiny memory footprint regardless of total matched rows.
   2.  **Query 2 (Bounded Fetch)**: Use the resulting array of IDs (up to `page_size`) to fetch the full row payloads via a safe `WHERE id IN (...)` clause with any necessary joins.
 
-### 4.1 Scanned Row Circuit Breaker
+### 4.1 Strict Schema Enforcement
 
-The read path utilizes a circuit breaker, changing its focus from "punishing large match counts" to "preventing unindexed table scans."
+The read path abandons the illusion of dynamically tracking "scanned rows" via internal metrics before query execution. Database safety is instead guaranteed entirely through rigorous schema-level enforcement by the default `MySQL Native Driver`.
 
-- **Threshold Trigger**: Rather than tripping on the number of returned matches, the system evaluates internal limits or tracked metrics to ensure the number of _scanned rows_ does not exceed a hard threshold.
-- **Hard Failure Fallback**: If a query is poorly formed (e.g., forcing a massive scan despite indices), the framework aborts the request and returns an **HTTP 400 Bad Request** outlining that the query is non-performant. It does _not_ throw 422 errors for queries that successfully use an index but happen to match many rows.
+- **Predictable Execution (No Fallbacks)**: The system does not attempt to catch low-cardinality index scans or "poorly formed queries" dynamically at runtime. Instead, the driver categorically prevents unindexed filtering at the API contract level (as defined in Section 2.2).
+- **Index Responsibility**: The framework delegates the responsibility of query performance—ensuring high index cardinality—entirely to the schema designer. The native driver relies strictly on the `LIMIT {page_size} + 1` bound applied to a covering index in the Paginated Probe (Query 1) to prevent catastrophic application memory spikes. A slow index scan caused by a low-selectivity filter is treated as an architectural configuration failure, not a runtime exception.
+- **Immediate Pre-Flight Rejection**: Any API attempt to filter or sort on a field lacking an explicit `is_filterable = true` registry flag immediately aborts the CodeIgniter 4 request with an **HTTP 400 Bad Request** before the database is ever touched.
 
 ### 4.2 Asynchronous Exports (Massive Data Retrieval)
 
