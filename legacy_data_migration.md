@@ -2,6 +2,13 @@
 
 This document outlines the operational playbook for migrating existing tenants to the new Vertical Schema Partitioning architecture without locking or threatening the availability of the legacy Virtual Column system.
 
+## 0. Migration Context & Paradigm Shifts
+
+This migration represents a fundamental shift in how the database is utilized to prevent runaway resource consumption at scale. The key transitional shifts are:
+
+- **The Architectural Shift**: This operational playbook governs the active migration from the legacy **Virtual Column Method** (single-table logic) to a 1:1 **Vertical Schema Partitioning (Extension Tables)** strategy (`entry_data` + `entry_slots_page_X`).
+- **Mitigating Strict Page Limits**: To enforce database safety without punishing valid consumer use cases, this migration **introduces a dedicated asynchronous export pattern** (`/api/exports`). This allows us to mandate strict, synchronous cursor-based page limits on our core REST API (`/api/entries`) without abandoning consumers who genuinely rely on bulk data retrieval during the transition.
+
 ## 1. Asynchronous Dual-Write (Event Stream)
 Synchronous atomic dual-writes are strictly forbidden.
 *   **Phase 1 (The Producer)**: The API synchronous path writes mutations *only* to the legacy Virtual Columns. Upon success, it emits a domain event (`EntryCreated`, `EntryUpdated_v2`, `EntryDeleted`) to a highly available message queue using `entry_id` as the partition key.
