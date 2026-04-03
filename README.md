@@ -14,14 +14,14 @@ SDDPG serves as the canonical reference for architectural decisions, migration s
 ## Current Contents
 
 | Document | Description |
-|---|---|
-| [`migration_plan.md`](migration_plan.md) | Vertical Schema Partitioning architecture plan — covers schema design, API contract, read/write paths, and bounded query circuit breakers. |
+| --- | --- |
+| [`architecture_blueprint.md`](architecture_blueprint.md) | Core Architecture Blueprint — covers Vertical Schema Partitioning, strict resource bounding, API contracts, and read/write paths. |
 | [`legacy_data_migration.md`](legacy_data_migration.md) | Operational playbook for migrating historical data — covers asynchronous dual-writes, dead letter queues, backfill pumps, and cutover protocols. |
 
 ## Planned Contents
 
 | Document / Directory | Purpose |
-|---|---|
+| --- | --- |
 | `adrs/` — Architecture Decision Records | Immutable log of *why* key technical decisions were made (e.g., "Why extension tables over EAV?"). Prevents re-litigating settled debates. |
 | `schemas/` — ERD & Schema Reference | Canonical entity-relationship diagrams. Single source of truth for the physical schema, kept in sync with the codebase. |
 | `api/` — API Contract Specification | Internal API surface documentation — endpoint behavior, error codes, consistency headers. A developer's behavioral reference, not a public OpenAPI spec. |
@@ -32,10 +32,10 @@ SDDPG serves as the canonical reference for architectural decisions, migration s
 
 ## Repository Structure
 
-```
+```text
 SDDPG/
 ├── README.md
-├── migration_plan.md
+├── architecture_blueprint.md
 ├── legacy_data_migration.md
 ├── adrs/               # Architecture Decision Records
 ├── schemas/            # ERD, schema diagrams
