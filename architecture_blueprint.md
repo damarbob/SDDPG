@@ -8,7 +8,7 @@ This document defines the core architecture for StarDust, which utilizes a **Ver
 - **Strict Resource Bounding**: Ensure MySQL query execution is tightly bounded via a configurable circuit breaker and strictly enforced schema indexing, preventing disk spillage of temporary tables without relying on external 3rd-party search infrastructure.
 - **Stable Consumer Contract**: Provide explicit, deterministic API endpoints. The system will gracefully reject unoptimized queries (e.g., filtering on unindexed fields) with a `400 Bad Request` rather than silently degrading database performance.
 - **Extensible Search Architecture (Adapter Pattern)**: Ship the core system as a purely standalone, zero-dependency relational engine to minimize the infrastructural barrier to entry. Future integration with dedicated search engines (e.g., Meilisearch, OpenSearch) is facilitated through an open Driver/Adapter interface at the CodeIgniter 4 application layer.
-- **Operational Resilience**: Guarantee data integrity under degraded states (e.g., slot exhaustion) through a robust fallback queue (`stardust_sync_queue`) and idempotent background reconciliation daemons.
+- **Operational Resilience**: Guarantee data integrity under degraded states (e.g., slot exhaustion) through a robust fallback queue (`stardust_sync_queue`) and two independent background daemons — **The Watcher** (capacity provisioning) and **The Reconciler** (queue draining) — operating as isolated failure domains.
 
 ---
 
@@ -36,14 +36,33 @@ MySQL is treated strictly as a transactional store, not a catch-all search engin
 
 ### 2.1 Automated Page Provisioning & Exhaustion Fallback
 
-A background daemon monitors global slot consumption and provisions new extension pages when capacity drops below 20%.
+Two independent background PHP daemons manage extension page lifecycle and data recovery. They share no direct IPC; the schema registry (database) is the sole coordination point between them.
 
-- **Safeguards**: Employs Empty-Table-Only DDL, Advisory Locking (`GET_LOCK('stardust_page_provision', 10)`), and Atomic Registry Updates to prevent metadata lock contention. `ALTER TABLE` on populated pages via daemon is strictly forbidden.
-- **⚠️ Exhaustion Fallback (Resilience)**: If the provisioning daemon fails and slot capacity reaches 100%, high-throughput ingestion **must not block or drop writes**.
-  - The payload splitting engine will gracefully degrade.
-  - It writes the full JSON payload into the `entry_data` table and skips writing to the `entry_slots_page_X` table. The failed operation ID is written into the `stardust_sync_queue` table.
-  - **Persistent Queue Daemon**: A background PHP daemon continuously polls the `stardust_sync_queue` utilizing `SELECT ... FOR UPDATE SKIP LOCKED` to concurrently claim tasks without metadata lock contention on the main ingestion thread.
-  - **Reconciler Backpressure**: Once a new page is provisioned, the daemon aligns the pending entries into the new extension table and deletes the queue rows. It processes in configurable chunks (default: `500`) with a configurable delay between chunks to prevent write spikes against the extension table during recovery. The daemon reports throughput metrics to stdout (rows processed / elapsed time).
+- **⚠️ Exhaustion Fallback (Resilience)**: If the Watcher fails and slot capacity reaches 100%, high-throughput ingestion **must not block or drop writes**. The payload splitting engine gracefully degrades: it writes the full JSON payload into the `entry_data` table, skips writing to the `entry_slots_page_X` table, and enqueues the entry ID into the `stardust_sync_queue` table. The Reconciler will backfill these entries once capacity is restored.
+
+#### 2.1.1 The Watcher (Capacity Monitor & Page Provisioner)
+
+A **singleton** background daemon responsible exclusively for monitoring global slot consumption across all `entry_slots_page_X` tables and provisioning new pages when available capacity drops below 20%.
+
+- **Execution Profile**: Lazy polling interval (configurable, default: `60s`). The Watcher is not latency-sensitive — it runs on a leisurely schedule.
+- **Safeguards**: Employs Empty-Table-Only DDL, Advisory Locking (`GET_LOCK('stardust_page_provision', 10)`), and Atomic Registry Updates to prevent metadata lock contention. `ALTER TABLE` on populated pages is strictly forbidden.
+- **Provisioning Signal**: On successful page creation, the Watcher atomically updates the schema registry. This registry update is the sole signal consumed by the Reconciler — no direct notification is required.
+
+#### 2.1.2 The Reconciler (Queue Drain & Data Backfill)
+
+An independent background daemon responsible exclusively for draining the `stardust_sync_queue` and backfilling entries into extension tables.
+
+- **Queue Polling**: Continuously polls `stardust_sync_queue` utilizing `SELECT ... FOR UPDATE SKIP LOCKED` to concurrently claim tasks without metadata lock contention on the main ingestion thread.
+- **Capacity Check**: On each poll cycle, the Reconciler queries the schema registry for available slot capacity. If capacity exists, it backfills entries using `INSERT ... ON DUPLICATE KEY UPDATE` and deletes the corresponding queue rows. If no capacity exists, it sleeps and retries.
+- **Backpressure**: Processes in configurable chunks (default: `500`) with a configurable delay between chunks to prevent write spikes against extension tables during recovery.
+- **Observability**: Reports throughput metrics to stdout (rows processed / elapsed time).
+- **Multi-Worker Safe**: `SKIP LOCKED` provides natural row-level mutual exclusion, allowing horizontal scaling during recovery bursts.
+
+#### 2.1.3 Coordination & Concurrency Constraints
+
+- **The Watcher is a strict singleton.** Multiple Watcher instances racing to provision the same page will cause DDL conflicts despite advisory locking (lock timeouts, duplicate table names). Enforce via PID file or OS-level process locking.
+- **The Reconciler supports multiple workers.** `SELECT ... FOR UPDATE SKIP LOCKED` guarantees row-level mutual exclusion across concurrent workers.
+- **Failure Isolation**: Either daemon can crash independently without affecting the other. If the Watcher dies, the Reconciler continues draining into existing pages with remaining capacity. If the Reconciler dies, the Watcher continues provisioning — the queue grows, but writes never block because the exhaustion fallback (above) keeps ingestion operational.
 
 ### 2.2 Index Provisioning Policy
 
@@ -94,7 +113,7 @@ The read path actively avoids the illusion of dynamically tracking "scanned rows
 To maintain the strict synchronous page limits on `/api/entries` without abandoning consumers who genuinely need massive datasets, StarDust utilizes a dedicated export pattern.
 
 - **The `/api/exports` Endpoint**: A consumer posts a large query filter to `/api/exports`. The API accepts the payload, validates the query, and responds immediately with a `202 Accepted` and an export Job ID.
-- **Background Materialization**: A PHP daemon (akin to the sync queue) picks up the export job. It seamlessly pages through the database using the same Cursor-Based Pagination described above (Query 1 and Query 2 in a loop) and writes the output locally to a streaming CSV or JSON file on disk.
+- **Background Materialization**: A dedicated PHP daemon (separate from the Watcher and Reconciler) picks up the export job. It seamlessly pages through the database using the same Cursor-Based Pagination described above (Query 1 and Query 2 in a loop) and writes the output locally to a streaming CSV or JSON file on disk.
 - **Result Delivery**: Once complete, the consumer can poll the job status and receive a downloaded artifact. This keeps the database safe from massive single-query memory spikes while delivering "the best service" by not forcing clients off the platform for reporting.
 
 ---
