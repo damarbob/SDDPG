@@ -16,6 +16,7 @@ SDDPG serves as the canonical reference for architectural decisions, migration s
 | Document | Description |
 | --- | --- |
 | [`architecture_blueprint.md`](architecture_blueprint.md) | Core Architecture Blueprint — covers Vertical Schema Partitioning, strict resource bounding, API contracts, and read/write paths. |
+| [`schemas/schema_reference.md`](schemas/schema_reference.md) | ERD & Schema Reference — the single source of truth for the physical schema (core payload, extension tables, and operations queue). |
 | [`legacy_data_migration.md`](legacy_data_migration.md) | Operational playbook for migrating historical data — covers asynchronous dual-writes, dead letter queues, backfill pumps, and cutover protocols. |
 
 ## Planned Contents
@@ -23,7 +24,6 @@ SDDPG serves as the canonical reference for architectural decisions, migration s
 | Document / Directory | Purpose |
 | --- | --- |
 | `adrs/` — Architecture Decision Records | Immutable log of *why* key technical decisions were made (e.g., "Why extension tables over EAV?"). Prevents re-litigating settled debates. |
-| `schemas/` — ERD & Schema Reference | Canonical entity-relationship diagrams. Single source of truth for the physical schema, kept in sync with the codebase. |
 | `api/` — API Contract Specification | Internal API surface documentation — endpoint behavior, error codes, consistency headers. A developer's behavioral reference, not a public OpenAPI spec. |
 | `runbooks/` — Ops Playbook | Operational procedures: DLQ replay, backfill pump execution, page provisioning, rollback triggers. Reduces bus factor. |
 | `glossary.md` — Domain Dictionary | Canonical definitions for project-specific terms (e.g., "extension table", "slot", "page", "desync flag"). Eliminates cross-team ambiguity. |
