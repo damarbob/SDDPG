@@ -26,6 +26,7 @@ Blueprints may be updated freely until status reaches `Implemented`. After that,
 
 ## Index
 
-| Blueprint                                                        | Status | Summary                                                         |
-| :--------------------------------------------------------------- | :----- | :-------------------------------------------------------------- |
-| [`watcher_reconciler_daemons.md`](watcher_reconciler_daemons.md) | Draft  | Feature spec for the Watcher and Reconciler background daemons. |
+| Blueprint                                                        | Status | Summary                                                          |
+| :--------------------------------------------------------------- | :----- | :--------------------------------------------------------------- |
+| [`watcher_reconciler_daemons.md`](watcher_reconciler_daemons.md) | Draft  | Feature spec for the Watcher and Reconciler background daemons.  |
+| [`search_driver_adapter.md`](search_driver_adapter.md)           | Draft  | Pluggable search driver interface for non-MySQL search backends. |
