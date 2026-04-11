@@ -69,7 +69,7 @@ A holding queue for migration event payloads that failed processing by the dual-
 A state indicator signaling that an entry's indexed representation in one or more extension tables is inconsistent with the current schema registry expectations. Two scenarios produce desync:
 
 1. **Row desync** — The extension table row is entirely missing. This occurs during an Exhaustion Fallback: the entry is written to `entry_data` only, and its `entry_id` is enqueued to `stardust_sync_queue`. The Reconciler resolves this by backfilling the missing row once capacity is restored.
-2. **Index desync** — The extension table row exists, but it resides on a page that was provisioned *before* a field's `is_filterable` flag was changed to `true`. The required B-tree index is absent on that page. Because `ALTER TABLE` on populated pages is forbidden, the index cannot be retroactively added. *(Resolution strategy is an open architectural gap — see note below.)*
+2. **Index desync** — The extension table row exists, but it resides on a page that was provisioned _before_ a field's `is_filterable` flag was changed to `true`. The required B-tree index is absent on that page. Because `ALTER TABLE` on populated pages is forbidden, the index cannot be retroactively added. _(Resolution strategy is an open architectural gap — see note below.)_
 
 > [!WARNING]
 > Index desync (scenario 2) has no documented resolution mechanism. This is a candidate for a future Architecture Decision Record.
@@ -215,7 +215,7 @@ The API's strict enforcement mechanism for unindexed filter attempts. If a consu
 
 ---
 
-### Scanned Row Circuit Breaker *(deprecated)*
+### Scanned Row Circuit Breaker _(deprecated)_
 
 A previously proposed runtime mechanism for bounding query execution by tracking scanned rows during query evaluation. This concept has been superseded by Pre-Flight Rejection — strict schema-level enforcement that categorically prevents unindexed queries at the API contract level, eliminating the need for runtime row-count monitoring.
 
@@ -292,7 +292,7 @@ A singleton background PHP CLI daemon (`php spark stardust:watcher`) responsible
 
 ### Three-Gate Protocol
 
-The sequential cutover validation process during legacy data migration. Cutover proceeds through three quantifiable gates: (1) **Stream Drain** — consumer group lag holds at `0` for ≥15 minutes; (2) **Data Parity** — random-sample dual-read of ≥10,000 entries yields 100% byte-identical match; (3) **Shadow Traffic** *(optional)* — a small percentage of reads are routed to the new schema to verify latency and correctness.
+The sequential cutover validation process during legacy data migration. Cutover proceeds through three quantifiable gates: (1) **Stream Drain** — consumer group lag holds at `0` for ≥15 minutes; (2) **Data Parity** — random-sample dual-read of ≥10,000 entries yields 100% byte-identical match; (3) **Shadow Traffic** _(optional)_ — a small percentage of reads are routed to the new schema to verify latency and correctness.
 
 **See also:** Dual-Write, Shadow Traffic, Feature Flag.
 
