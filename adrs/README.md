@@ -27,6 +27,7 @@ Write an ADR when a proposed change or decision:
 
 ## Index
 
-| ADR                                    | Status   | Summary                                        |
-| :------------------------------------- | :------- | :--------------------------------------------- |
-| [`0000-use-adrs.md`](0000-use-adrs.md) | Accepted | Decision to use Architecture Decision Records. |
+| ADR                                                                      | Status   | Summary                                                                          |
+| :----------------------------------------------------------------------- | :------- | :------------------------------------------------------------------------------- |
+| [`0000-use-adrs.md`](0000-use-adrs.md)                                   | Accepted | Decision to use Architecture Decision Records.                                   |
+| [`0001-extension-tables-over-eav.md`](0001-extension-tables-over-eav.md) | Accepted | Chooses vertical extension tables over EAV, sparse-table, and JSON-only storage. |
