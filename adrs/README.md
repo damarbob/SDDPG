@@ -24,3 +24,9 @@ Write an ADR when a proposed change or decision:
 | **Template**     | [`_template.md`](_template.md) — copy this to start a new ADR                                                                                                                                                               |
 | **Immutability** | ADRs are **append-only**. Do not edit the core decision or context of a published ADR. If a decision is changed later, create a new ADR that supersedes the original, and update the status of the old one to `Superseded`. |
 | **Status**       | `Proposed` → `Accepted`, `Rejected`, `Deprecated`, `Superseded`                                                                                                                                                             |
+
+## Index
+
+| ADR                                    | Status   | Summary                                        |
+| :------------------------------------- | :------- | :--------------------------------------------- |
+| [`0000-use-adrs.md`](0000-use-adrs.md) | Accepted | Decision to use Architecture Decision Records. |
