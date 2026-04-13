@@ -27,8 +27,9 @@ Write an ADR when a proposed change or decision:
 
 ## Index
 
-| ADR                                                                                      | Status   | Summary                                                                              |
-| :--------------------------------------------------------------------------------------- | :------- | :----------------------------------------------------------------------------------- |
-| [`0000-use-adrs.md`](0000-use-adrs.md)                                                   | Accepted | Decision to use Architecture Decision Records.                                       |
-| [`0001-extension-tables-over-eav.md`](0001-extension-tables-over-eav.md)                 | Accepted | Chooses vertical extension tables over EAV, sparse-table, and JSON-only storage.     |
-| [`0002-mysql-native-zero-dependency-core.md`](0002-mysql-native-zero-dependency-core.md) | Accepted | Establishes MySQL as the standalone core engine with optional external search later. |
+| ADR                                                                                      | Status   | Summary                                                                                |
+| :--------------------------------------------------------------------------------------- | :------- | :------------------------------------------------------------------------------------- |
+| [`0000-use-adrs.md`](0000-use-adrs.md)                                                   | Accepted | Decision to use Architecture Decision Records.                                         |
+| [`0001-extension-tables-over-eav.md`](0001-extension-tables-over-eav.md)                 | Accepted | Chooses vertical extension tables over EAV, sparse-table, and JSON-only storage.       |
+| [`0002-mysql-native-zero-dependency-core.md`](0002-mysql-native-zero-dependency-core.md) | Accepted | Establishes MySQL as the standalone core engine with optional external search later.   |
+| [`0003-schema-driven-index-provisioning.md`](0003-schema-driven-index-provisioning.md)   | Accepted | Makes schema metadata the source of truth for which fields are indexed and filterable. |
