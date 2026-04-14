@@ -34,3 +34,4 @@ Write an ADR when a proposed change or decision:
 | [`0002-mysql-native-zero-dependency-core.md`](0002-mysql-native-zero-dependency-core.md) | Accepted | Establishes MySQL as the standalone core engine with optional external search later.      |
 | [`0003-schema-driven-index-provisioning.md`](0003-schema-driven-index-provisioning.md)   | Accepted | Makes schema metadata the source of truth for which fields are indexed and filterable.    |
 | [`0004-fail-fast-on-unindexed-filters.md`](0004-fail-fast-on-unindexed-filters.md)       | Accepted | Rejects unsupported filters and sorts instead of degrading into unsafe database behavior. |
+| [`0005-two-query-bounded-read-path.md`](0005-two-query-bounded-read-path.md)             | Accepted | Enforces the paginated probe plus bounded fetch pattern for synchronous reads.            |
