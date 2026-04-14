@@ -58,11 +58,20 @@ An independent background daemon responsible exclusively for draining the `stard
 - **Observability**: Reports throughput metrics to stdout (rows processed / elapsed time).
 - **Multi-Worker Safe**: `SKIP LOCKED` provides natural row-level mutual exclusion, allowing horizontal scaling during recovery bursts.
 
-#### 2.1.3 Coordination & Concurrency Constraints
+#### 2.1.3 The Liberator (Slot Eviction & Capacity Reclamation)
+
+An independent background daemon responsible exclusively for sweeping "dead" slots to prevent capacity exhaustion ("Slot Squatting"). Operating under the **Strict Projection Rule**, extension tables are treated purely as index materializations; the true system of record remains the `fields` JSON payload.
+
+- **Eviction Triggers**: If a field is entirely deleted or its `is_filterable` flag is demoted to `false`, its physical mapping (e.g., `i_str_01`) is immediately severed in the Schema Registry. The API instantly falls back to `JSON_EXTRACT` for subsequent queries (see §3).
+- **Tombstoning**: To prevent data bleeding (where a newly mapped field accidentally inherits old data), the severed slot is marked `tombstoned` in the registry. It cannot be mapped to a new field for that model.
+- **Background Sweeping**: The Liberator lazily processes tombstoned slots without locking tables, executing chunked DML nullification (`UPDATE entry_slots_page_X SET i_str_XX = NULL WHERE tenant_id = ? AND id > ? LIMIT 500`).
+- **Capacity Reclamation**: Once The Liberator confirms a slot is 100% nullified for a tenant/model partition, it updates the registry to mark the slot `free`, making it safely available for a new indexable field.
+
+#### 2.1.4 Coordination & Concurrency Constraints
 
 - **The Watcher is a strict singleton.** Multiple Watcher instances racing to provision the same page will cause DDL conflicts despite advisory locking (lock timeouts, duplicate table names). Enforce via PID file or OS-level process locking.
 - **The Reconciler supports multiple workers.** `SELECT ... FOR UPDATE SKIP LOCKED` guarantees row-level mutual exclusion across concurrent workers.
-- **Failure Isolation**: Either daemon can crash independently without affecting the other. If the Watcher dies, the Reconciler continues draining into existing pages with remaining capacity. If the Reconciler dies, the Watcher continues provisioning — the queue grows, but writes never block because the exhaustion fallback (above) keeps ingestion operational.
+- **Failure Isolation**: Any daemon can crash independently without affecting the others. If the Watcher dies, the Reconciler continues draining into existing pages with remaining capacity. If the Reconciler dies, the Watcher continues provisioning — the queue grows, but writes never block because the exhaustion fallback (above) keeps ingestion operational. If the Liberator dies, dead slots simply stay `tombstoned` and squat on capacity until it recovers. Ingestion and synchronous retrieval are never blocked by daemon failures.
 
 ### 2.2 Index Provisioning Policy
 
@@ -87,7 +96,7 @@ The API must never leak the physical database design or silently shift consisten
   - To minimize the maintenance layer, relying on external 3rd-party services (like OpenSearch) is strongly discouraged. As a standalone engine, StarDust does not perform transparent proxying or dynamic shifts to eventual consistency.
   - To support scale without breaking the consumer contract, `/api/entries` mandates **Cursor-Based Pagination**. The system never evaluates the total matched set of a query; it only evaluates the requested page (e.g., `LIMIT 50`). This ensures valid business queries are never arbitrarily rejected with 422 errors simply because the result set grew over time.
   - If a synchronous query scans an excessively large amount of rows without a proper index limit, it will trip the **Scanned Row Circuit Breaker** (see Section 4).
-- **Seamless Field Selection**: Consumers request fields logically using standard query parameters (e.g., `?select=firstName,jobId`). The system dynamically determines if a field requires an `INNER JOIN` against an extension table or a `JSON_EXTRACT(fields, '$.propertyName')` from the core payload on retrieval (select only, never for filtering), automatically merging the final representation.
+- **Seamless Field Selection**: Consumers request fields logically using standard query parameters (e.g., `?select=firstName,jobId`). The system dynamically determines if a field requires an `INNER JOIN` against an extension table or a `JSON_EXTRACT(fields, '$.propertyName')` from the core payload on retrieval (select only, never for filtering), automatically merging the final representation. This guarantees that demoted (`is_filterable = false`) or unindexed fields are seamlessly supported via the core payload without squatting on finite physical schema slots.
 
 ---
 
