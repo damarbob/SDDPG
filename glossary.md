@@ -15,6 +15,15 @@ A MySQL `GET_LOCK()` call used for mutual exclusion during page provisioning. Th
 
 ---
 
+### Asynchronous Exports
+
+The pattern for retrieving massive datasets that exceed synchronous query limits. Consumers submit a query to the `/api/exports` endpoint, which immediately returns a `202 Accepted` and a Job ID. A background daemon then pages through the database using Cursor-Based Pagination and writes the output to a file. This ensures the strict memory restrictions on synchronous endpoints are not bypassed.
+
+**Aliases:** Background Materialization.
+**See also:** Cursor-Based Pagination.
+
+---
+
 ### Backfill Pump
 
 A CLI command (`php spark stardust:backfill`) that iterates over historical `entry_data` records in ascending `id` order and pushes them into the event stream for replication into extension tables. It maintains state via a `backfill_checkpoints` table, allowing resumability (`--from-id`) and reports throughput metrics to stdout. Used during legacy data migration.
@@ -250,6 +259,14 @@ A typed column within an extension table (e.g., `i_str_01`, `i_int_15`, `i_num_0
 
 ---
 
+### Slot Squatting
+
+The capacity exhaustion anti-pattern where fields that are no longer filterable (or entirely deleted) continue to occupy physical column slots in extension tables. The Liberator daemon prevents this by reclaiming and nullifying these slots.
+
+**See also:** The Liberator, Slot.
+
+---
+
 ### Soft Deletion
 
 The temporal deletion strategy used by StarDust. Entries are never physically removed via `DELETE`; instead, the `deleted_at` column on `entry_data` is set to the deletion timestamp. The composite index `(tenant_id, deleted_at, created_at)` supports efficient queries that exclude soft-deleted records.
@@ -266,11 +283,27 @@ The physical MySQL table name for the ephemeral operations queue. A tiny, dedica
 
 ---
 
+### Strict Projection Rule
+
+The architectural directive stating that extension tables are treated strictly as temporal index materializations designed for fast retrieval. The true and authoritative "system of record" always remains the full JSON payload stored within `entry_data.fields`.
+
+**See also:** Extension Table, Core Payload Table.
+
+---
+
 ### Tenant
 
 The top-level data isolation boundary in StarDust, identified by `tenant_id`. All queries enforce `tenant_id` matching across `entry_data` and extension table `INNER JOIN` conditions. A tenant's data is completely invisible to other tenants at the query level.
 
 **See also:** Entry, Model.
+
+---
+
+### The Liberator
+
+An independent background PHP daemon responsible exclusively for sweeping dead or demoted slots to prevent Slot Squatting. It monitors the schema registry for tombstoned slots and reclaims them using chunked DML nullification without locking tables, ultimately marking them as safely `free` for future indexing needs.
+
+**See also:** Slot Squatting, Tombstoned Slot, Schema Registry.
 
 ---
 
@@ -295,6 +328,14 @@ A singleton background PHP CLI daemon (`php spark stardust:watcher`) responsible
 The sequential cutover validation process during legacy data migration. Cutover proceeds through three quantifiable gates: (1) **Stream Drain** — consumer group lag holds at `0` for ≥15 minutes; (2) **Data Parity** — random-sample dual-read of ≥10,000 entries yields 100% byte-identical match; (3) **Shadow Traffic** _(optional)_ — a small percentage of reads are routed to the new schema to verify latency and correctness.
 
 **See also:** Dual-Write, Shadow Traffic, Feature Flag.
+
+---
+
+### Tombstoned Slot
+
+The transitional state of an evicted slot. When a field loses its filterable status, its associated slot is severed in the schema registry and marked as "tombstoned". To prevent data bleeding, it cannot be mapped to a new field until The Liberator successfully processes and nullifies all residual data across the respective tenant partition.
+
+**See also:** The Liberator, Slot Squatting, Schema Registry.
 
 ---
 
