@@ -27,12 +27,13 @@ Write an ADR when a proposed change or decision:
 
 ## Index
 
-| ADR                                                                                      | Status   | Summary                                                                                    |
-| :--------------------------------------------------------------------------------------- | :------- | :----------------------------------------------------------------------------------------- |
-| [`0000-use-adrs.md`](0000-use-adrs.md)                                                   | Accepted | Decision to use Architecture Decision Records.                                             |
-| [`0001-extension-tables-over-eav.md`](0001-extension-tables-over-eav.md)                 | Accepted | Chooses vertical extension tables over EAV, sparse-table, and JSON-only storage.           |
-| [`0002-mysql-native-zero-dependency-core.md`](0002-mysql-native-zero-dependency-core.md) | Accepted | Establishes MySQL as the standalone core engine with optional external search later.       |
-| [`0003-schema-driven-index-provisioning.md`](0003-schema-driven-index-provisioning.md)   | Accepted | Makes schema metadata the source of truth for which fields are indexed and filterable.     |
-| [`0004-fail-fast-on-unindexed-filters.md`](0004-fail-fast-on-unindexed-filters.md)       | Accepted | Rejects unsupported filters and sorts instead of degrading into unsafe database behavior.  |
-| [`0005-two-query-bounded-read-path.md`](0005-two-query-bounded-read-path.md)             | Accepted | Enforces the paginated probe plus bounded fetch pattern for synchronous reads.             |
-| [`0006-cursor-based-pagination.md`](0006-cursor-based-pagination.md)                     | Accepted | Mandates cursor-based pagination; forbids OFFSET and COUNT(\*) on the MySQL Native Driver. |
+| ADR                                                                                                        | Status   | Summary                                                                                            |
+| :--------------------------------------------------------------------------------------------------------- | :------- | :------------------------------------------------------------------------------------------------- |
+| [`0000-use-adrs.md`](0000-use-adrs.md)                                                                     | Accepted | Decision to use Architecture Decision Records.                                                     |
+| [`0001-extension-tables-over-eav.md`](0001-extension-tables-over-eav.md)                                   | Accepted | Chooses vertical extension tables over EAV, sparse-table, and JSON-only storage.                   |
+| [`0002-mysql-native-zero-dependency-core.md`](0002-mysql-native-zero-dependency-core.md)                   | Accepted | Establishes MySQL as the standalone core engine with optional external search later.               |
+| [`0003-schema-driven-index-provisioning.md`](0003-schema-driven-index-provisioning.md)                     | Accepted | Makes schema metadata the source of truth for which fields are indexed and filterable.             |
+| [`0004-fail-fast-on-unindexed-filters.md`](0004-fail-fast-on-unindexed-filters.md)                         | Accepted | Rejects unsupported filters and sorts instead of degrading into unsafe database behavior.          |
+| [`0005-two-query-bounded-read-path.md`](0005-two-query-bounded-read-path.md)                               | Accepted | Enforces the paginated probe plus bounded fetch pattern for synchronous reads.                     |
+| [`0006-cursor-based-pagination.md`](0006-cursor-based-pagination.md)                                       | Accepted | Mandates cursor-based pagination; forbids OFFSET and COUNT(\*) on the MySQL Native Driver.         |
+| [`0007-write-availability-over-query-completeness.md`](0007-write-availability-over-query-completeness.md) | Accepted | Prioritises write availability over indexed query completeness when extension slots are exhausted. |
