@@ -17,10 +17,10 @@ A MySQL `GET_LOCK()` call used for mutual exclusion during page provisioning. Th
 
 ### Asynchronous Exports
 
-The pattern for retrieving massive datasets that exceed synchronous query limits. Consumers submit a query to the `/api/exports` endpoint, which immediately returns a `202 Accepted` and a Job ID. A background daemon then pages through the database using Cursor-Based Pagination and writes the output to a file. This ensures the strict memory restrictions on synchronous endpoints are not bypassed.
+The pattern for retrieving massive datasets that exceed synchronous query limits. Consumers submit a query to the `/api/exports` endpoint, which immediately returns a `202 Accepted` and a Job ID. **The Chronicler** then pages through the database using Cursor-Based Pagination and writes the output to a file. This ensures the strict memory restrictions on synchronous endpoints are not bypassed.
 
 **Aliases:** Background Materialization.
-**See also:** Cursor-Based Pagination.
+**See also:** The Chronicler, Cursor-Based Pagination.
 
 ---
 
@@ -296,6 +296,14 @@ The architectural directive stating that extension tables are treated strictly a
 The top-level data isolation boundary in StarDust, identified by `tenant_id`. All queries enforce `tenant_id` matching across `entry_data` and extension table `INNER JOIN` conditions. A tenant's data is completely invisible to other tenants at the query level.
 
 **See also:** Entry, Model.
+
+---
+
+### The Chronicler
+
+An independent background PHP daemon responsible exclusively for materializing asynchronous export jobs. It claims pending jobs from the exports queue via `SELECT ... FOR UPDATE SKIP LOCKED`, pages through the database using the same Cursor-Based Pagination and Two-Query Approach used by the synchronous read path, and streams the output to a local file on disk (CSV or JSON). Each database operation remains bounded by `page_size`, ensuring the transactional database is never subjected to unbounded queries during export materialization. The Chronicler is independent of the Watcher, Reconciler, and Liberator — it does not interact with the schema registry and does not participate in daemon-to-daemon coordination (ADR `0015`).
+
+**See also:** Asynchronous Exports, Cursor-Based Pagination, Two-Query Approach.
 
 ---
 

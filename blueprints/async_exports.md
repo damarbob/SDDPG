@@ -11,7 +11,7 @@ The synchronous `/api/entries` endpoint enforces strict cursor-based page limits
 ## 2. Scope
 
 - A new **`/api/exports`** endpoint that accepts a query filter payload and returns `202 Accepted` with a Job ID.
-- A **background export daemon** (separate process from the Watcher and Reconciler) that:
+- **The Chronicler** — a background daemon (separate process from the Watcher, Reconciler, and Liberator) — that:
   - Claims pending export jobs.
   - Pages through the database using the same bounded two-query approach (Architecture Blueprint §4, Query 1 + Query 2 in a loop).
   - Streams output to a local CSV or JSON file on disk.
@@ -28,7 +28,7 @@ The synchronous `/api/entries` endpoint enforces strict cursor-based page limits
 ## 4. Acceptance Criteria
 
 1. A consumer can `POST` a valid filter payload to `/api/exports` and receive a `202 Accepted` response containing a unique Job ID.
-2. The export daemon processes the job without violating the bounded query execution constraints (no single query materialises more than `page_size` rows in application memory).
+2. The Chronicler processes the job without violating the bounded query execution constraints (no single query materialises more than `page_size` rows in application memory).
 3. A consumer can poll the job status and receive one of: `pending`, `processing`, `completed`, `failed`.
 4. On `completed`, the consumer can download the artifact as CSV or JSON (format specified in the original request).
 5. A failed export writes diagnostic information (filter payload, failure reason, row cursor at failure) to the job record for operator inspection.
@@ -41,7 +41,7 @@ sequenceDiagram
     participant C as Consumer
     participant API as /api/exports
     participant DB as Database
-    participant D as Export Daemon
+    participant D as The Chronicler
 
     C->>API: POST filter payload
     API->>DB: Validate filter, insert job row
@@ -67,7 +67,7 @@ sequenceDiagram
 
 **Key decisions:**
 
-- The daemon uses `SELECT ... FOR UPDATE SKIP LOCKED` to claim jobs, enabling horizontal scaling if export volume demands it.
+- The Chronicler uses `SELECT ... FOR UPDATE SKIP LOCKED` to claim jobs, enabling horizontal scaling if export volume demands it.
 - The same Cursor-Based Pagination used by `/api/entries` is reused, ensuring no new query execution paths are introduced.
 - File writes are streaming (append per chunk), keeping daemon memory bounded regardless of total export size.
 
