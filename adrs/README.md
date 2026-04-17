@@ -38,3 +38,4 @@ Write an ADR when a proposed change or decision:
 | [`0006-cursor-based-pagination.md`](0006-cursor-based-pagination.md)                                       | Accepted | Mandates cursor-based pagination; forbids OFFSET and COUNT(\*) on the MySQL Native Driver.              |
 | [`0007-write-availability-over-query-completeness.md`](0007-write-availability-over-query-completeness.md) | Accepted | Prioritises write availability over indexed query completeness when extension slots are exhausted.      |
 | [`0008-singleton-watcher-multi-worker-reconciler.md`](0008-singleton-watcher-multi-worker-reconciler.md)   | Accepted | Documents asymmetric scaling: singleton Watcher (DDL safety) vs. multi-worker Reconciler (SKIP LOCKED). |
+| [`0009-tombstone-based-slot-eviction.md`](0009-tombstone-based-slot-eviction.md)                           | Accepted | Enforces sever → tombstone → sweep → reclaim lifecycle to prevent data bleeding on slot reuse.          |
