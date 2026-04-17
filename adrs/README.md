@@ -39,3 +39,4 @@ Write an ADR when a proposed change or decision:
 | [`0007-write-availability-over-query-completeness.md`](0007-write-availability-over-query-completeness.md) | Accepted | Prioritises write availability over indexed query completeness when extension slots are exhausted.      |
 | [`0008-singleton-watcher-multi-worker-reconciler.md`](0008-singleton-watcher-multi-worker-reconciler.md)   | Accepted | Documents asymmetric scaling: singleton Watcher (DDL safety) vs. multi-worker Reconciler (SKIP LOCKED). |
 | [`0009-tombstone-based-slot-eviction.md`](0009-tombstone-based-slot-eviction.md)                           | Accepted | Enforces sever → tombstone → sweep → reclaim lifecycle to prevent data bleeding on slot reuse.          |
+| [`0010-asynchronous-exports.md`](0010-asynchronous-exports.md)                                             | Accepted | Provides `/api/exports` (202 Accepted) for unbounded retrieval without relaxing synchronous limits.     |
