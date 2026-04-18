@@ -73,6 +73,27 @@ An independent background daemon responsible exclusively for sweeping "dead" slo
 - **The Reconciler supports multiple workers.** `SELECT ... FOR UPDATE SKIP LOCKED` guarantees row-level mutual exclusion across concurrent workers.
 - **Failure Isolation**: Any daemon can crash independently without affecting the others. If the Watcher dies, the Reconciler continues draining into existing pages with remaining capacity. If the Reconciler dies, the Watcher continues provisioning — the queue grows, but writes never block because the exhaustion fallback (above) keeps ingestion operational. If the Liberator dies, dead slots simply stay `tombstoned` and squat on capacity until it recovers. Ingestion and synchronous retrieval are never blocked by daemon failures.
 
+#### 2.1.5 Slot Assignment Lifecycle
+
+When a new model field is registered in the schema registry, the system assigns it a physical slot column in two steps:
+
+1. **Type resolution**: The field's declared type (`string`, `int`, `numeric`, `datetime`) maps to the corresponding column family (`i_str_XX`, `i_int_XX`, `i_num_XX`, `i_dt_XX`).
+2. **Slot reservation**: The registry scans existing extension pages for a free slot of the matching type. The first available slot is atomically reserved in the registry and marked `assigned` to the field. No DDL is executed — slot reservation is a pure registry write. If no free slot of the required type exists on any provisioned page, the field is left unmapped until the Watcher provisions a new page and the reservation is retried.
+
+Once assigned, the payload splitting engine extracts the field's value from each incoming entry's `fields` JSON payload and writes it directly to the reserved slot column. For entries written during a capacity gap (and therefore queued via the exhaustion fallback), the Reconciler performs the same extraction via `JSON_EXTRACT` during its backfill pass.
+
+The assigned slot is the physical target for all slot-based reads, index filters, and the Liberator's sweep — it does not change unless the field is evicted or its type changes.
+
+#### 2.1.6 Field Type Change Lifecycle
+
+When a model field's declared type is changed (e.g., `string → int`), its existing slot is physically incompatible with the new type. The system follows a **retype → tombstone → assign → backfill → promote** lifecycle:
+
+1. **Retype (atomic registry update)**: The field's declared type is updated atomically. The old slot mapping is immediately severed — all reads fall back to `JSON_EXTRACT`. The field's slot status is set to `retyping`, suppressing both slot-based reads and index-based filtering regardless of the `is_filterable` flag.
+2. **Tombstone old slot**: The vacated slot is tombstoned and handed off to the Liberator for the standard sweep-nullify-reclaim lifecycle (§2.1.3). No special casing is required.
+3. **Assign new slot (existing pages first)**: The registry follows the standard slot assignment process (§2.1.5) using the new target type. The first free slot of the correct type is reserved — **no new page is provisioned** by this step. New page provisioning remains exclusively the Watcher's responsibility, triggered independently by its capacity threshold. If no free slot of the target type exists, the field stays in `JSON_EXTRACT` fallback until the Watcher provisions a new page and assignment is retried.
+4. **Backfill via Reconciler**: A backfill record is enqueued. The Reconciler processes it in configurable chunks using `JSON_EXTRACT` + type coercion. Entries where the value cannot be coerced (e.g., a non-numeric string being retyped to `int`) store `NULL` in the new slot and fall back to `JSON_EXTRACT` on retrieval. **Filterability remains suppressed** (slot status = `backfilling`) until backfill completes.
+5. **Promote**: Once the Reconciler confirms all rows in the tenant/model partition are processed, the slot status advances to `ready`. If `is_filterable = true`, the composite index on the new slot becomes active for query routing.
+
 ### 2.2 Index Provisioning Policy
 
 Indexing decisions are **schema-driven**, governed by the `is_filterable` metadata flag set at model-field registration time.
