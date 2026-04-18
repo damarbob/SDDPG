@@ -40,3 +40,4 @@ Write an ADR when a proposed change or decision:
 | [`0008-singleton-watcher-multi-worker-reconciler.md`](0008-singleton-watcher-multi-worker-reconciler.md)   | Accepted | Documents asymmetric scaling: singleton Watcher (DDL safety) vs. multi-worker Reconciler (SKIP LOCKED). |
 | [`0009-tombstone-based-slot-eviction.md`](0009-tombstone-based-slot-eviction.md)                           | Accepted | Enforces sever → tombstone → sweep → reclaim lifecycle to prevent data bleeding on slot reuse.          |
 | [`0010-asynchronous-exports.md`](0010-asynchronous-exports.md)                                             | Accepted | Provides `/api/exports` (202 Accepted) for unbounded retrieval without relaxing synchronous limits.     |
+| [`0011-chunked-bulk-ingestion.md`](0011-chunked-bulk-ingestion.md)                                         | Accepted | Scopes transactions to individual chunks, trading batch-level atomicity for operational safety.         |
