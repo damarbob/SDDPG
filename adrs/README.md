@@ -42,3 +42,4 @@ Write an ADR when a proposed change or decision:
 | [`0010-asynchronous-exports.md`](0010-asynchronous-exports.md)                                             | Accepted | Provides `/api/exports` (202 Accepted) for unbounded retrieval without relaxing synchronous limits.     |
 | [`0011-chunked-bulk-ingestion.md`](0011-chunked-bulk-ingestion.md)                                         | Accepted | Scopes transactions to individual chunks, trading batch-level atomicity for operational safety.         |
 | [`0012-immutable-extension-page-ddl.md`](0012-immutable-extension-page-ddl.md)                             | Accepted | Forbids ALTER TABLE on populated pages; new capacity is added only via new empty tables.                |
+| [`0013-json-payload-as-system-of-record.md`](0013-json-payload-as-system-of-record.md)                     | Accepted | Establishes JSON payload as sole authority; extension slots are derived materializations.               |
