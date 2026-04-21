@@ -36,7 +36,7 @@ MySQL is treated strictly as a transactional store, not a catch-all search engin
 
 ### 2.1 Automated Page Provisioning & Exhaustion Fallback
 
-Three independent background PHP daemons manage extension page lifecycle and data recovery. They share no direct IPC; the schema registry (database) is the sole coordination point between them.
+Three independent background PHP daemons manage extension page lifecycle and data recovery. They share no direct IPC; the schema registry (database) is the sole coordination point between them. The registry's concrete shape — tables, slot status enum, atomicity boundaries — is defined in §2.3 and [`schemas/schema_reference.md`](schemas/schema_reference.md) §4.
 
 - **⚠️ Exhaustion Fallback (Resilience)**: If the Watcher fails and slot capacity reaches 100%, high-throughput ingestion **must not block or drop writes**. The payload splitting engine gracefully degrades: it writes the full JSON payload into the `entry_data` table, skips writing to the `entry_slots_page_X` table, and enqueues the entry ID into the `stardust_sync_queue` table. The Reconciler will backfill these entries once capacity is restored.
 
@@ -86,13 +86,12 @@ The assigned slot is the physical target for all slot-based reads, index filters
 
 #### 2.1.6 Field Type Change Lifecycle
 
-When a model field's declared type is changed (e.g., `string → int`), its existing slot is physically incompatible with the new type. The system follows a **retype → tombstone → assign → backfill → promote** lifecycle:
+When a model field's declared type is changed (e.g., `string → int`), its existing slot is physically incompatible with the new type. The system follows a **retype → tombstone → assign → backfill → promote** lifecycle. There is no dedicated `retyping` slot status — the transition is expressed as coordinated state changes across two `stardust_slot_assignments` rows (the old slot and the new slot), committed together where possible.
 
-1. **Retype (atomic registry update)**: The field's declared type is updated atomically. The old slot mapping is immediately severed — all reads fall back to `JSON_EXTRACT`. The field's slot status is set to `retyping`, suppressing both slot-based reads and index-based filtering regardless of the `is_filterable` flag.
-2. **Tombstone old slot**: The vacated slot is tombstoned and handed off to the Liberator for the standard sweep-nullify-reclaim lifecycle (§2.1.3). No special casing is required.
-3. **Assign new slot (existing pages first)**: The registry follows the standard slot assignment process (§2.1.5) using the new target type. The first free slot of the correct type is reserved — **no new page is provisioned** by this step. New page provisioning remains exclusively the Watcher's responsibility, triggered independently by its capacity threshold. If no free slot of the target type exists, the field stays in `JSON_EXTRACT` fallback until the Watcher provisions a new page and assignment is retried.
-4. **Backfill via Reconciler**: A backfill record is enqueued. The Reconciler processes it in configurable chunks using `JSON_EXTRACT` + type coercion. Entries where the value cannot be coerced (e.g., a non-numeric string being retyped to `int`) store `NULL` in the new slot and fall back to `JSON_EXTRACT` on retrieval. **Filterability remains suppressed** (slot status = `backfilling`) until backfill completes.
-5. **Promote**: Once the Reconciler confirms all rows in the tenant/model partition are processed, the slot status advances to `ready`. If `is_filterable = true`, the composite index on the new slot becomes active for query routing.
+1. **Retype (atomic registry transaction)**: In one commit, the field's `declared_type` is updated, the old slot flips `status: assigned → tombstoned` with `field_id → NULL` (entering the standard sweep-nullify-reclaim lifecycle under the Liberator — §2.1.3), and — if a free slot of the target type is available on any existing page — a new slot flips `status: free → backfilling` with `field_id` set to this field. The field's live slot is now `backfilling`, so slot-based reads and index-based filtering are both suppressed regardless of `is_filterable`; all reads fall back to `JSON_EXTRACT`. **No new page is provisioned** by this step.
+2. **Deferred assignment (only if no free slot of the target type existed)**: The old slot is tombstoned, but no new slot was assigned in step 1. The field is temporarily unmapped and reads fall back to `JSON_EXTRACT`. When the Watcher independently detects low capacity and provisions a new page (§2.1.1), the standard slot assignment process (§2.1.5) reserves a slot of the target type and transitions it `free → backfilling` with `field_id` set.
+3. **Backfill via Reconciler**: A backfill record is enqueued. The Reconciler processes it in configurable chunks using `JSON_EXTRACT` + type coercion. Entries where the value cannot be coerced (e.g., a non-numeric string being retyped to `int`) store `NULL` in the new slot and fall back to `JSON_EXTRACT` on retrieval. **Filterability remains suppressed** (slot status = `backfilling`) until backfill completes.
+4. **Promote**: Once the Reconciler confirms all rows in the tenant/model partition are processed, the slot status advances to `ready`. If `is_filterable = true`, the composite index on the new slot becomes active for query routing.
 
 ### 2.2 Index Provisioning Policy
 
@@ -101,6 +100,23 @@ Indexing decisions are **schema-driven**, governed by the `is_filterable` metada
 - If `is_filterable = true` → a composite B-tree index `(tenant_id, slot_column)` is included in the page DDL at provisioning time.
 - If `is_filterable = false` → the slot is used for discrete retrieval only. **Filters against non-filterable fields are strictly forbidden.** To maintain low latency, MySQL will never evaluate `JSON_EXTRACT` inside a `WHERE` clause. If a consumer attempts to filter on an unindexed field, the API will strictly reject the request with an **HTTP 400 Bad Request**. No fallback or suggestions for in-memory bulk filtering will be provided, forcing the consumer to request proper schema provisioning if the filter is a genuine business requirement.
 - This ensures index provisioning is a deterministic, auditable decision tied to the schema registry.
+
+### 2.3 Schema Registry (Field-to-Slot Mapping)
+
+Slot columns (`i_str_01`, `i_int_15`, etc.) are generically named and carry no domain meaning. The **schema registry** is the database-resident metadata catalog that records which physical slot each model field occupies, the lifecycle state of that slot, and the `is_filterable` flag driving index routing. It is the sole coordination surface shared by the payload splitting engine, the read path, and the three daemons. No daemon signals another except by writing registry state; there is no message bus, pub/sub channel, or direct IPC between them.
+
+The registry is normative, not implementation detail. Its full DDL lives in [`schemas/schema_reference.md`](schemas/schema_reference.md) §4.
+
+- **Four tables**: `stardust_models`, `stardust_fields`, `stardust_pages`, `stardust_slot_assignments`.
+- **Closed slot status enum**: `free | assigned | tombstoned | backfilling | ready`. Every transition in §2.1.3, §2.1.5, and §2.1.6 moves a `stardust_slot_assignments` row between these states. A retype is expressed as coordinated transitions across two rows (old slot tombstoned + new slot assigned to `backfilling`), not as a single intermediate state.
+- **Uniqueness at the database level**: `UNIQUE (page_id, slot_column)` prevents two fields from racing onto the same physical column; a partial unique on `field_id` filtered to live statuses (`assigned`, `backfilling`, `ready`) prevents a field from occupying two slots at once. The old slot of an in-flight retype is `tombstoned` with `field_id = NULL` and does not block the new slot's assignment.
+- **Atomic transitions**: each of the following must commit inside a single registry transaction:
+  - **Sever + tombstone**: `status: assigned → tombstoned` and `field_id → NULL` in one commit. Readers never observe a slot still marked "assigned" but no longer mapped.
+  - **Retype + tombstone old + assign new**: `declared_type` update, old slot `assigned → tombstoned` (`field_id → NULL`), and new slot `free → backfilling` (`field_id` set) all commit together. If no free slot of the target type exists, the old slot is still tombstoned in that commit and the new-slot assignment is deferred to §2.1.5 once capacity is restored.
+  - **Sweep completion + slot free**: the Liberator's final nullification batch and `tombstoned → free` commit together. A slot cannot be reassigned until the sweep-confirm is durable.
+  - **Page provisioning + slot inventory insert**: the Watcher's `CREATE TABLE` is followed immediately by a single transaction inserting the `stardust_pages` row and all new `stardust_slot_assignments` rows (`status = 'free'`). The page is never visible to the Reconciler before its slot inventory is registered.
+
+On every write, the payload splitting engine looks up the live `(page, slot_column)` for each field via `stardust_fields` → `stardust_slot_assignments`. On every read, the same lookup determines whether `?select=fieldName` resolves to an `INNER JOIN` on the assigned slot column, or falls back to `JSON_EXTRACT(fields, '$.fieldName')` from `entry_data`. The `fields` JSON column is the authoritative system of record; slot columns are index materializations derived from it.
 
 ---
 
