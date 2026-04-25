@@ -5,7 +5,7 @@ This document defines the core architecture for StarDust, which utilizes a **Ver
 ## 1. Core Architectural Pillars
 
 - **Architectural Foundation**: The system utilizes a 1:1 extension table strategy (`entry_data` + `entry_slots_page_X`), optimized strictly as a high-throughput ingestion and discrete retrieval engine.
-- **Strict Resource Bounding**: Ensure MySQL query execution is tightly bounded via a configurable circuit breaker and strictly enforced schema indexing, preventing disk spillage of temporary tables without relying on external 3rd-party search infrastructure.
+- **Strict Resource Bounding**: Ensure MySQL query execution is tightly bounded via pre-flight schema validation and strictly enforced schema indexing, preventing disk spillage of temporary tables without relying on external 3rd-party search infrastructure.
 - **Stable Consumer Contract**: Provide explicit, deterministic API endpoints. The system will gracefully reject unoptimized queries (e.g., filtering on unindexed fields) with a `400 Bad Request` rather than silently degrading database performance.
 - **Extensible Search Architecture (Adapter Pattern)**: Ship the core system as a purely standalone, zero-dependency relational engine to minimize the infrastructural barrier to entry. Future integration with dedicated search engines (e.g., Meilisearch, OpenSearch) is facilitated through an open Driver/Adapter interface at the CodeIgniter 4 application layer.
 - **Operational Resilience**: Guarantee data integrity under degraded states (e.g., slot exhaustion) through a robust fallback queue (`stardust_sync_queue`) and two independent background daemons — **The Watcher** (capacity provisioning) and **The Reconciler** (queue draining) — operating as isolated failure domains.
@@ -36,7 +36,7 @@ MySQL is treated strictly as a transactional store, not a catch-all search engin
 
 ### 2.1 Automated Page Provisioning & Exhaustion Fallback
 
-Three independent background PHP daemons manage extension page lifecycle and data recovery. They share no direct IPC; the schema registry (database) is the sole coordination point between them. The registry's concrete shape — tables, slot status enum, atomicity boundaries — is defined in §2.3 and [`schemas/schema_reference.md`](schemas/schema_reference.md) §4.
+Three independent background PHP daemons manage extension page lifecycle and data recovery. They share no direct IPC; the schema registry (database) is the sole coordination point between them. The registry's concrete shape — tables, slot status enum, atomicity boundaries — is defined in §2.3.
 
 - **⚠️ Exhaustion Fallback (Resilience)**: If the Watcher fails and slot capacity reaches 100%, high-throughput ingestion **must not block or drop writes**. The payload splitting engine gracefully degrades: it writes the full JSON payload into the `entry_data` table, skips writing to the `entry_slots_page_X` table, and enqueues the entry ID into the `stardust_sync_queue` table. The Reconciler will backfill these entries once capacity is restored.
 
@@ -105,7 +105,7 @@ Indexing decisions are **schema-driven**, governed by the `is_filterable` metada
 
 Slot columns (`i_str_01`, `i_int_15`, etc.) are generically named and carry no domain meaning. The **schema registry** is the database-resident metadata catalog that records which physical slot each model field occupies, the lifecycle state of that slot, and the `is_filterable` flag driving index routing. It is the sole coordination surface shared by the payload splitting engine, the read path, and the three daemons. No daemon signals another except by writing registry state; there is no message bus, pub/sub channel, or direct IPC between them.
 
-The registry is normative, not implementation detail. Its full DDL lives in [`schemas/schema_reference.md`](schemas/schema_reference.md) §4.
+The registry is normative, not implementation detail. Its full DDL and normative table definitions are specified in the Schema Reference.
 
 - **Four tables**: `stardust_models`, `stardust_fields`, `stardust_pages`, `stardust_slot_assignments`.
 - **Closed slot status enum**: `free | assigned | tombstoned | backfilling | ready`. Every transition in §2.1.3, §2.1.5, and §2.1.6 moves a `stardust_slot_assignments` row between these states. A retype is expressed as coordinated transitions across two rows (old slot tombstoned + new slot assigned to `backfilling`), not as a single intermediate state.
@@ -132,7 +132,7 @@ The API must never leak the physical database design or silently shift consisten
   - Consumers use `/api/entries` for standard synchronous data retrieval.
   - To minimize the maintenance layer, relying on external 3rd-party services (like OpenSearch) is strongly discouraged. As a standalone engine, StarDust does not perform transparent proxying or dynamic shifts to eventual consistency.
   - To support scale without breaking the consumer contract, `/api/entries` mandates **Cursor-Based Pagination**. The system never evaluates the total matched set of a query; it only evaluates the requested page (e.g., `LIMIT 50`). This ensures valid business queries are never arbitrarily rejected with 422 errors simply because the result set grew over time.
-  - If a synchronous query scans an excessively large amount of rows without a proper index limit, it will trip the **Scanned Row Circuit Breaker** (see Section 4).
+  - If a query references a field lacking `is_filterable = true` in the schema registry, the API rejects the request with **HTTP 400 Bad Request** before any database interaction (see Section 4). There is no runtime row-count tracking or query-time abort mechanism — safety is enforced exclusively at the schema-validation layer.
 - **Seamless Field Selection**: Consumers request fields logically using standard query parameters (e.g., `?select=firstName,jobId`). The system dynamically determines if a field requires an `INNER JOIN` against an extension table or a `JSON_EXTRACT(fields, '$.propertyName')` from the core payload on retrieval (select only, never for filtering), automatically merging the final representation. This guarantees that demoted (`is_filterable = false`) or unindexed fields are seamlessly supported via the core payload without squatting on finite physical schema slots.
 
 ---
