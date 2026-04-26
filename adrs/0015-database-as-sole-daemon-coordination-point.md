@@ -1,6 +1,6 @@
 # 0015 - Database as Sole Daemon Coordination Point
 
-**Status:** Accepted
+**Status:** Proposed
 **Created:** 2026-04-18
 
 ## Context

@@ -1,6 +1,6 @@
 # 0013 - JSON Payload as Authoritative System of Record
 
-**Status:** Accepted
+**Status:** Proposed
 **Created:** 2026-04-18
 
 ## Context

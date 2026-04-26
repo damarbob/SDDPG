@@ -1,6 +1,6 @@
 # 0011 - Chunked Bulk Ingestion with Per-Chunk Transaction Scoping
 
-**Status:** Accepted
+**Status:** Proposed
 **Created:** 2026-04-18
 
 ## Context

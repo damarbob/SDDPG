@@ -1,6 +1,6 @@
 # 0016 - Field Type Change Lifecycle (Type-Driven Slot Reassignment)
 
-**Status:** Accepted
+**Status:** Proposed
 **Created:** 2026-04-20
 
 ## Context

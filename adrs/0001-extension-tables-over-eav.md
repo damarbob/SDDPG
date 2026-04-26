@@ -1,6 +1,6 @@
 # 0001 - Extension Tables Over EAV
 
-**Status:** Accepted
+**Status:** Proposed
 **Created:** 2026-04-12
 
 ## Context

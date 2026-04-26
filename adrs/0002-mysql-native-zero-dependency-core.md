@@ -1,6 +1,6 @@
 # 0002 - MySQL-Native Zero-Dependency Core
 
-**Status:** Accepted
+**Status:** Proposed
 **Created:** 2026-04-12
 
 ## Context

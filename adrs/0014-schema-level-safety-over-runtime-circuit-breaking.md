@@ -1,6 +1,6 @@
 # 0014 - Schema-Level Safety Over Runtime Circuit Breaking
 
-**Status:** Accepted
+**Status:** Proposed
 **Created:** 2026-04-18
 
 ## Context

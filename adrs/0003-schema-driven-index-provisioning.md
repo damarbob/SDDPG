@@ -1,6 +1,6 @@
 # 0003 - Schema-Driven Index Provisioning
 
-**Status:** Accepted
+**Status:** Proposed
 **Created:** 2026-04-12
 
 ## Context

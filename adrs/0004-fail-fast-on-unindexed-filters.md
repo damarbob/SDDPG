@@ -1,6 +1,6 @@
 # 0004 - Fail Fast on Unindexed Filters
 
-**Status:** Accepted
+**Status:** Proposed
 **Created:** 2026-04-14
 
 ## Context

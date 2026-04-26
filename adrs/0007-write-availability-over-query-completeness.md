@@ -1,6 +1,6 @@
 # 0007 - Write Availability Over Query Completeness on Slot Exhaustion
 
-**Status:** Accepted
+**Status:** Proposed
 **Created:** 2026-04-15
 
 ## Context

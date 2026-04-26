@@ -1,6 +1,6 @@
 # 0010 - Asynchronous Exports for Unbounded Data Retrieval
 
-**Status:** Accepted
+**Status:** Proposed
 **Created:** 2026-04-16
 
 ## Context

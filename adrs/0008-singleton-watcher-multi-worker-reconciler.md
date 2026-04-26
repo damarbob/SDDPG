@@ -1,6 +1,6 @@
 # 0008 - Singleton Watcher with Multi-Worker Reconciler
 
-**Status:** Accepted
+**Status:** Proposed
 **Created:** 2026-04-17
 
 ## Context

@@ -1,6 +1,6 @@
 # 0006 - Cursor-Based Pagination Over Offset Pagination
 
-**Status:** Accepted
+**Status:** Proposed
 **Created:** 2026-04-15
 
 ## Context

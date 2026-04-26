@@ -1,6 +1,6 @@
 # 0012 - Immutable Extension Page DDL (Empty-Table-Only Schema Changes)
 
-**Status:** Accepted
+**Status:** Proposed
 **Created:** 2026-04-18
 
 ## Context
