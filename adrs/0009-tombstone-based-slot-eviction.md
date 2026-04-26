@@ -23,6 +23,15 @@ Slot eviction follows a strict three-phase lifecycle: **sever → tombstone → 
 
 4. **Reclaim.** Once the Liberator confirms a slot is 100% nullified for a given tenant/model partition, it updates the registry to mark the slot `free`. Only then is the slot safely available for mapping to a new field.
 
+### Operational Parameters
+
+The Liberator's runtime profile is fixed by this ADR to give the Watcher a stable capacity-accounting model and to make sweep behavior auditable.
+
+- **Singleton.** The Liberator runs as a single instance per deployment, enforced by a PID file or OS-level process lock identical to the Watcher's mechanism (see ADR `0008`). Multiple Liberator workers are explicitly rejected: concurrent `UPDATE ... SET i_str_XX = NULL` statements against the same `(page, slot)` produce no correctness problem (NULL is idempotent), but they multiply InnoDB row-lock contention and obscure sweep progress in the per-slot `sweep_cursor_id`. The sweep workload is dominated by IO and short row locks, not CPU; horizontal scaling delivers no throughput benefit and degrades observability.
+- **Per-batch checkpoint.** The Liberator commits the updated `sweep_cursor_id` (next-batch high-water mark on `entry_id`) to `stardust_slot_assignments` in the **same transaction** as the chunked `UPDATE`. There is no separate "save cursor" step. On crash, the Liberator resumes from the last committed `sweep_cursor_id` for that slot and re-issues the next chunk; already-nullified rows in the resumed chunk are no-ops because `NULL` is idempotent.
+- **Deadlock policy.** Concurrent reads against the swept page take only shared row-level locks (the bounded fetch in ADR `0005` reads via `WHERE id IN (...)`), so deadlocks against the Liberator's `UPDATE ... LIMIT 500` are uncommon but possible under high read load on the same `tenant_id` partition. On `SQLSTATE 40001` (deadlock detected by InnoDB), the Liberator rolls back the chunk, sleeps for the inter-chunk delay, and retries from the same `sweep_cursor_id` — it does **not** advance the cursor on failure. After three consecutive deadlocks against the same chunk, the Liberator logs the slot identity and skips ahead by `LIMIT` rows, leaving a `sweep_gap` flag on the registry row for operator inspection. This bounded retry prevents a hot read partition from indefinitely blocking sweep progress while still surfacing pathological contention.
+- **Sweep priority.** The Liberator processes tombstoned slots in `tombstoned_at ASC` order — oldest first — so capacity is reclaimed in roughly the order it was vacated. Tie-broken by `(page_id, slot_column)` for deterministic ordering across restarts.
+
 ## Consequences
 
 **Positive:**
@@ -37,9 +46,12 @@ Slot eviction follows a strict three-phase lifecycle: **sever → tombstone → 
 - Tombstoned slots temporarily squat on finite capacity. Under high field churn (frequent promotions and demotions), the number of simultaneously tombstoned slots can grow, reducing available capacity and increasing pressure toward slot exhaustion.
 - The Liberator's sweep latency is non-deterministic. Large tables with millions of rows require many chunked passes, during which the slot remains unavailable.
 - Operators must monitor tombstone depth and Liberator throughput as leading indicators of capacity pressure. A stalled Liberator silently degrades available capacity without triggering any immediate error.
+- The singleton model means total sweep throughput is bounded by one process. Operators with extreme tombstone churn must accept longer reclaim latency rather than horizontally scaling the daemon.
 
 **Rejected alternatives:**
 
 - Immediate slot reuse after demotion — causes data bleeding if any rows still contain the old field's values. The new field would silently inherit stale data that is type-compatible and structurally indistinguishable from legitimate values.
 - `DELETE` rows containing stale data and re-insert — destructive, risks permanent data loss if the JSON payload is incomplete, and causes massive write amplification on large tables.
 - Out-of-band cleanup before reuse (block provisioning until sweep completes) — adds latency to the provisioning path and couples the Watcher's DDL cycle to the Liberator's sweep progress, violating failure isolation.
+- Multi-worker Liberator coordinated by `SKIP LOCKED` on `stardust_slot_assignments` — rejected because the sweep workload is IO-bound (bulk `UPDATE` on a single page) rather than CPU-bound, so additional workers do not increase throughput. They do, however, multiply InnoDB row-lock contention against concurrent reads on the swept page and fragment the per-slot `sweep_cursor_id` semantics. The marginal throughput gain does not justify the loss of a clean single-cursor sweep model.
+- Periodic checkpoint flush (e.g., every N chunks rather than per-chunk) — rejected because the per-chunk checkpoint is already committed alongside the chunk's `UPDATE` in the same transaction, making the checkpoint write effectively free. A separate flush cadence would create a window where committed nullifications are not reflected in the registry, allowing the Watcher to undercount free capacity after a Liberator crash.
