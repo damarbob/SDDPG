@@ -24,6 +24,19 @@ Specifically:
 
 Daemon responsiveness is limited to polling intervals. The Reconciler does not learn about new capacity until its next poll cycle after the Watcher commits the registry update. This introduces coordination latency proportional to the polling interval (configurable, not instantaneous).
 
+### Schema Cache Invalidation
+
+The synchronous ingestion path (the API workers, not the daemons) caches the schema registry to avoid a multi-table lookup on every write. A naive static TTL creates a forced trade-off between cache effectiveness and recovery responsiveness: too long, and the API stays blind to newly provisioned pages during an exhaustion burst, needlessly funneling writes into `stardust_sync_queue`; too short, and the API hammers the registry tables on every request.
+
+The cache invalidation strategy is **registry-versioned, not time-versioned**:
+
+- **A `stardust_schema_version` row** (or a `schema_version` column on a singleton control table — implementation detail) holds a monotonically increasing integer. Every transaction that mutates the registry's coordination-relevant state — page provisioning (Watcher), slot status transitions (all daemons), field metadata changes — increments this value in the same transaction as the underlying mutation. The increment is cheap; it shares the registry transaction's commit flush.
+- **The API cache key includes the version.** Each cache entry is keyed by `(schema_version, lookup_key)`. A stale cache entry is harmless: it simply yields a cache miss when the version advances, prompting a fresh registry read.
+- **Version-only liveness probe.** On every request, the API issues a single small `SELECT version FROM stardust_schema_version` (a single-row, single-column read on a tiny table — covered by the buffer pool, sub-millisecond). If the value matches the cached version, the cached registry snapshot is reused. If it differs, the snapshot is reloaded.
+- **Bounded staleness fallback TTL.** As a defense against pathological scenarios (e.g., a buggy mutation that fails to bump the version), every cache entry also carries a hard 60-second TTL. The TTL acts as a safety net, not as the primary refresh mechanism.
+
+This design eliminates the cache-stall window (the API picks up new capacity within one request of the Watcher's commit) without bypassing the cache (writes still amortize across cache hits between version bumps). It introduces no new coordination channel — the version row is itself part of the registry, so it is governed by the same "database as sole coordination point" rule.
+
 ## Consequences
 
 **Positive:**
@@ -44,3 +57,6 @@ Daemon responsiveness is limited to polling intervals. The Reconciler does not l
 - Message queue (RabbitMQ, Redis Streams) for daemon-to-daemon notification — violates the zero-dependency core (ADR `0002`). Introduces a new failure domain: if the message broker is unavailable, daemons cannot coordinate, and the system's resilience guarantees degrade.
 - Filesystem-based signals (lock files, named pipes) — brittle and platform-dependent. Named pipes block on read/write, complicating daemon lifecycle management. Lock files require cleanup on crash and are unreliable across networked filesystems.
 - Direct IPC (HTTP callbacks, Unix sockets between daemons) — couples daemon lifecycles. If the Watcher notifies the Reconciler via HTTP callback and the Reconciler is unavailable, the Watcher must handle the failure, implement retries, and manage a notification queue — effectively reimplementing a message broker within the daemon itself.
+- Static schema-cache TTL only (no version row) — rejected because it forces an unwinnable trade-off between recovery responsiveness during exhaustion bursts (favors short TTL) and registry read amortization (favors long TTL). The version-row probe makes both fast in the common case.
+- Bypass the schema cache entirely — rejected because every write would issue a multi-table registry lookup, multiplying registry read load by the request rate and making the registry tables a hot contention point under load.
+- MySQL `LISTEN/NOTIFY`-style push (e.g., via the binlog or a polling-on-binlog mechanism) — rejected as over-engineered for the coordination needs at hand. The version-row probe is one trivial query per request and requires no special replication tooling, plugin, or CDC consumer.
