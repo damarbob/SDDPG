@@ -11,7 +11,7 @@ The slot assignment lifecycle (§2.1.5) provides the foundation for acquiring a 
 
 ## Decision
 
-A field type change triggers the **retype → tombstone → assign → backfill → promote** lifecycle defined in §2.1.6. The following commitments govern its execution:
+A field type change — and, by the identical mechanic, an `is_filterable: false → true` promotion on a field that already has data on its current (unindexed) slot — triggers the **sever → tombstone → assign → backfill → promote** lifecycle defined in §2.1.6. Both triggers share the same mechanism because the underlying problem is the same: the field's current slot cannot satisfy the new declared shape (a different SQL type, or no index where one is now required), and `ALTER TABLE` on a populated page is forbidden (ADR `0012`). The only safe path is to vacate the existing slot via the standard tombstone/sweep route while the Reconciler backfills a freshly-assigned slot from the JSON payload, which remains authoritative throughout (ADR `0013`). The following commitments govern execution:
 
 **Filterability is held for the entire backfill window.** A retype is expressed as coordinated state changes across two `stardust_slot_assignments` rows — the old slot flips `assigned → tombstoned` (and enters the standard Liberator sweep path), and, where capacity allows, a new slot of the target type flips `free → backfilling` in the same transaction (§2.3). There is no intermediate `retyping` slot status; the transitional state of the field is fully expressed by its new slot being in `backfilling` (or by the absence of any live slot, if capacity was unavailable at retype time). While the field's live slot is in `backfilling` — or while the field has no live slot at all — `is_filterable` has no effect on query routing, and all reads fall back to `JSON_EXTRACT`. Filterability is restored only when the Reconciler advances the slot status to `ready`. This prevents filtered queries from silently returning incomplete results during the migration window.
 
@@ -19,7 +19,7 @@ A field type change triggers the **retype → tombstone → assign → backfill 
 
 **Coercion failures store NULL and do not abort the backfill.** Entries whose values cannot be coerced to the new type (e.g., a non-numeric string being retyped to `int`) are stored as `NULL` in the new slot column. The JSON payload remains the authoritative system of record (§2.1.3 / ADR `0013`), so these entries fall back to `JSON_EXTRACT` on retrieval without permanent data loss.
 
-**New page provisioning is not part of the type change operation.** If no free slot of the target type exists on any existing page, the field waits in `JSON_EXTRACT` fallback until the Watcher independently detects low capacity and provisions a new page. The type change does not trigger DDL.
+**New page provisioning is not part of the type change or filterability promotion operation.** If no free slot of the target shape (correct type, indexed if needed) exists on any existing page, the field waits in `JSON_EXTRACT` fallback until the Watcher independently detects low capacity and provisions a new page. Neither trigger executes DDL synchronously.
 
 ## Consequences
 
