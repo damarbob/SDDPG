@@ -10,6 +10,10 @@ This document defines the core architecture for StarDust, which utilizes a **Ver
 - **Extensible Search Architecture (Adapter Pattern)**: Ship the core system as a purely standalone, zero-dependency relational engine to minimize the infrastructural barrier to entry. Future integration with dedicated search engines (e.g., Meilisearch, OpenSearch) is facilitated through an open Driver/Adapter interface at the CodeIgniter 4 application layer.
 - **Operational Resilience**: Guarantee data integrity under degraded states (e.g., slot exhaustion) through a robust fallback queue (`stardust_sync_queue`) and two independent background daemons — **The Watcher** (capacity provisioning) and **The Reconciler** (queue draining) — operating as isolated failure domains.
 
+### 1.1 Operating Environment
+
+StarDust targets MySQL 8.0.13 or newer (Percona Server 8.0.13+ is supported on the same basis). Older MySQL versions and MariaDB are explicitly out of scope: the schema registry's atomicity invariants rely on partial unique indexes, the registry diagnostic queries rely on common table expressions, and the operator runbooks for cardinality advisories rely on `EXPLAIN ANALYZE` — all of which require the 8.0.13 floor. Implementations may not target older versions; no compatibility shim or generated-column workaround is supported.
+
 ---
 
 ## 2. Technical Specifications & Storage Strategy
