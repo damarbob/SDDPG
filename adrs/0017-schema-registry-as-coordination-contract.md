@@ -63,10 +63,25 @@ The old slot and the new slot of a retype are independent rows in `stardust_slot
 
 **The registry is the only coordination surface.** Per ADR `0015`, no daemon signals another except via registry state changes. This ADR specifies the shape of those state changes; ADR `0015` specifies that no other channel exists.
 
+**Unmapped field state is contractual, not incidental.** A field row in `stardust_fields` with no live slot in `stardust_slot_assignments` (no row in `assigned`, `backfilling`, or `ready`) is in a recognized state called **unmapped**. This is not an error condition — it is one of three legitimate ways a field can exist in the registry:
+
+| Unmapped sub-state             | How to detect                                                                                                                                             | Cause                                                                                                                                                                  |
+| :----------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `unmapped_new`                 | No live slot AND no `tombstoned` slot exists (or has ever existed) for this `field_id`.                                                                   | Field was just registered and the assignment path (§2.1.5) has not yet found a compatible free slot.                                                                   |
+| `unmapped_pending_promotion`   | No live slot AND a `tombstoned` slot exists for this `field_id` AND the field's `declared_type`/`is_filterable` differ from that tombstoned slot's shape. | Migration was triggered (type change or filterability promotion per ADR `0016`), the old slot was tombstoned, but no compatible new slot was available at commit time. |
+| `unmapped_orphaned`            | No live slot AND a `tombstoned` slot exists with the same shape as the field.                                                                             | Anomaly — should not occur under correct ADR `0016` semantics. Surfaces as an operator alert.                                                                          |
+
+The read-path and filter-acceptance contract is **identical across all three sub-states**: reads fall back to `JSON_EXTRACT(fields, '$.fieldName')` and any filter request is rejected with `400 Bad Request` regardless of `is_filterable`. The sub-state distinction is for operator diagnostics and Watcher prioritization, not for correctness routing — a single contract ("no live slot ⇒ JSON read, rejected filter") covers all three.
+
+The Watcher MAY use `unmapped_pending_promotion` as a signal to prioritize provisioning a page whose slot inventory satisfies the pending field's shape (correct type, indexed if needed). This is the only inter-daemon use of unmapped sub-states; the read path never branches on them.
+
+The schema reference (§4.5 "Read routing per state") includes an explicit `(no live slot)` row covering this contract so the read path's behavior is documented at the same level as the in-status routing rules.
+
 ## Consequences
 
 **Positive:**
 
+- The unmapped-field contract removes a class of "ghost state" ambiguity: implementations cannot accidentally diverge on whether a field with no live slot is queryable, filterable, or in error. The single rule is contractual and the diagnostic sub-states are derived, not stored.
 - Implementers no longer need to invent the registry schema. A reference DDL and a closed state machine eliminate a wide class of "works in one implementation, silently diverges in another" defects.
 - The uniqueness constraints on `stardust_slot_assignments` make double-assignment (two fields racing onto the same slot) a database-level constraint violation rather than a best-effort application invariant. The race condition described in §2.1.5 ("atomically reserved") has an explicit enforcement mechanism.
 - The closed slot status enum removes ambiguity around edge cases: a field that is `backfilling` has unambiguously-defined read routing (`JSON_EXTRACT`) and filter behavior (rejected regardless of `is_filterable`). This directly supports ADR `0016`'s filterability-suspension guarantee.
