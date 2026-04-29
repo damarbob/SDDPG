@@ -71,11 +71,13 @@ sequenceDiagram
 - The same Cursor-Based Pagination used by `/api/entries` is reused, ensuring no new query execution paths are introduced.
 - File writes are streaming (append per chunk), keeping daemon memory bounded regardless of total export size.
 
-## 6. Open Questions
+## 6. Resolved Decisions
 
-1. **Job TTL and cleanup.** How long should completed export artifacts persist on disk before being garbage-collected? A background cleanup sweep or a fixed TTL (e.g., 24 hours) needs to be decided.
-2. **Concurrency limits.** Should there be a per-tenant cap on concurrent active exports to prevent a single tenant from monopolising the daemon?
-3. **Format negotiation.** Should format (CSV vs. JSON) be specified in the `POST` body, via `Accept` header, or both?
+The three open questions previously listed here are all answered by [ADR 0010](../adrs/0010-asynchronous-exports.md):
+
+1. **Job TTL and cleanup** — Completed export artifacts persist for **24 hours** after `completed_at` and are removed by the Chronicler's background GC sweep (which runs each idle cycle). The TTL is fixed by ADR, not configurable, to keep operator runbooks uniform across deployments.
+2. **Per-tenant concurrency cap** — A tenant may hold at most **3 concurrent active export jobs**. A 4th submission while three are active returns `429 Too Many Requests` with a `Retry-After` hint. This bounds noisy-neighbor pressure on the Chronicler without requiring per-tenant queueing.
+3. **Format negotiation** — The export format (CSV / JSON) is specified in the `POST` body field `format`, **not** the `Accept` header. The submission endpoint returns `202 Accepted` regardless of the eventual artifact MIME type; tying format selection to `Accept` would conflate request-shape negotiation with payload-shape selection.
 
 ## 7. Related Documents
 
