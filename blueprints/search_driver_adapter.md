@@ -71,11 +71,11 @@ classDiagram
 - `capabilities()` enables graceful capability negotiation rather than runtime `try/catch` against unsupported operations.
 - Driver resolution is a CI4 service binding — no factory registry or plugin loader complexity at this stage.
 
-## 6. Open Questions
+## 6. Resolved Decisions
 
-1. **Query translation boundary.** Should the interface accept a StarDust-native `QueryFilter` object (forcing drivers to translate), or a raw query DSL string (risking driver-specific leakage)? A `QueryFilter` value object is the current assumption.
-2. **Capability granularity.** Is a boolean per capability sufficient, or do drivers need to declare capability _constraints_ (e.g., "supports full-text search but only on string fields")?
-3. **Multi-driver composition.** Should the system eventually support routing different query types to different drivers within a single request, or is it strictly one active driver per deployment?
+1. **Query translation boundary** — resolved by [ADR 0021](../adrs/0021-search-driver-query-representation.md). `EntrySearchInterface` accepts a StarDust-native `QueryFilter` value object; raw DSL passthrough is rejected. The closed leaf-operator set (`eq`, `neq`, `lt`/`lte`/`gt`/`gte`, `in`/`nin`, `prefix`, `between`, `is_null`/`is_not_null`) plus composite nodes (`and`, `or`, `not`) bound what consumers can express in v1.
+2. **Capability granularity & `is_filterable` jurisdiction** — resolved by [ADR 0022](../adrs/0022-search-driver-capability-jurisdiction.md). Drivers expose a closed capability surface: `supportedOperators()`, `supportsFilterOn(field_id)`, `supportsFuzzySearch()`, `consistencyModel()`. The `is_filterable` registry flag retains MySQL-driver jurisdiction; non-MySQL drivers answer filter-acceptance via `supportsFilterOn`. Pre-flight rejects on either an unsupported operator or `supportsFilterOn(field_id) === false`.
+3. **Multi-driver composition** — out of scope for v1. One active driver per deployment, selected via CI4 service binding. A hybrid-driver routing mode would be a separate ADR if a use case emerges.
 
 ## 7. Related Documents
 
