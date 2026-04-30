@@ -161,6 +161,9 @@ One row per model field. The declared type and `is_filterable` flag are set here
 
 - `UNIQUE (model_id, name)` — a model cannot declare the same field name twice.
 
+> [!NOTE]
+> Field lifecycle state is **not** stored on this table. A field's state is derived from the existence (and status) of its row in `stardust_slot_assignments`. A field with no live slot (no `assigned`, `backfilling`, or `ready` row) is in the **unmapped** state — see ADR [`0017`](../adrs/0017-schema-registry-as-coordination-contract.md) for the three diagnostic sub-states (`unmapped_new`, `unmapped_pending_promotion`, `unmapped_orphaned`) and §4.5 below for the read-path contract.
+
 ### 4.3 `stardust_pages` (Provisioned Extension Pages)
 
 One row per provisioned `entry_slots_page_X` table. **Written exclusively by the Watcher** at page provisioning time; no other daemon mutates this table. The presence of a row is the signal the Reconciler consumes to discover new capacity (ADR [`0015`](../adrs/0015-database-as-sole-daemon-coordination-point.md)).
@@ -200,7 +203,7 @@ The authoritative field-to-slot mapping. One row per physical slot column per pa
 - `INDEX (page_id, status)` — supports per-page capacity accounting.
 
 > [!NOTE]
-> MySQL 8.0.13+ supports functional / conditional unique indexes. On earlier versions, the partial `UNIQUE (field_id) WHERE ...` can be emulated via a generated column containing `field_id` when `status` is live and `NULL` otherwise, with a standard `UNIQUE` on that column.
+> The partial unique index `UNIQUE (field_id) WHERE status IN ('assigned', 'backfilling', 'ready')` requires MySQL 8.0.13 or newer. **MySQL 8.0.13 is the project minimum** per ADR [`0023`](../adrs/0023-minimum-mysql-version.md); the previously documented generated-column workaround for older versions has been removed and is no longer a supported configuration.
 
 ### 4.5 Slot Status State Machine
 
@@ -220,13 +223,16 @@ stateDiagram-v2
 
 **Read routing per state:**
 
-| Status        | Slot-based read   | Filter acceptance              |
-| :------------ | :---------------- | :----------------------------- |
-| `free`        | n/a (no field)    | n/a                            |
-| `assigned`    | yes               | only if `is_filterable = true` |
-| `backfilling` | no → JSON_EXTRACT | rejected                       |
-| `ready`       | yes               | only if `is_filterable = true` |
-| `tombstoned`  | no → JSON_EXTRACT | rejected                       |
+| Status                      | Slot-based read   | Filter acceptance                        |
+| :-------------------------- | :---------------- | :--------------------------------------- |
+| `free`                      | n/a (no field)    | n/a                                      |
+| `assigned`                  | yes               | only if `is_filterable = true`           |
+| `backfilling`               | no → JSON_EXTRACT | rejected                                 |
+| `ready`                     | yes               | only if `is_filterable = true`           |
+| `tombstoned`                | no → JSON_EXTRACT | rejected                                 |
+| `(no live slot)` _unmapped_ | no → JSON_EXTRACT | rejected (regardless of `is_filterable`) |
+
+The `(no live slot)` row covers the three unmapped sub-states defined in ADR [`0017`](../adrs/0017-schema-registry-as-coordination-contract.md) (`unmapped_new`, `unmapped_pending_promotion`, `unmapped_orphaned`). Read routing and filter acceptance are uniform across all three; the sub-state distinction is for operator diagnostics and Watcher prioritization, not for read-path correctness.
 
 ### 4.6 Atomicity Invariants
 
