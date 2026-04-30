@@ -26,8 +26,9 @@ Blueprints may be updated freely until status reaches `Implemented`. After that,
 
 ## Index
 
-| Blueprint                                                        | Status | Summary                                                          |
-| :--------------------------------------------------------------- | :----- | :--------------------------------------------------------------- |
-| [`watcher_reconciler_daemons.md`](watcher_reconciler_daemons.md) | Draft  | Feature spec for the Watcher and Reconciler background daemons.  |
-| [`search_driver_adapter.md`](search_driver_adapter.md)           | Draft  | Pluggable search driver interface for non-MySQL search backends. |
-| [`async_exports.md`](async_exports.md)                           | Draft  | Dedicated asynchronous export endpoint for bulk data retrieval.  |
+| Blueprint                                                        | Status | Summary                                                                      |
+| :--------------------------------------------------------------- | :----- | :--------------------------------------------------------------------------- |
+| [`watcher_reconciler_daemons.md`](watcher_reconciler_daemons.md) | Draft  | Feature spec for the Watcher and Reconciler background daemons.              |
+| [`liberator_daemon.md`](liberator_daemon.md)                     | Draft  | Feature spec for the Liberator daemon (sever → tombstone → sweep → reclaim). |
+| [`search_driver_adapter.md`](search_driver_adapter.md)           | Draft  | Pluggable search driver interface for non-MySQL search backends.             |
+| [`async_exports.md`](async_exports.md)                           | Draft  | Dedicated asynchronous export endpoint for bulk data retrieval.              |
