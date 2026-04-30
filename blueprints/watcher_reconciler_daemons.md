@@ -93,11 +93,13 @@ flowchart TD
 - The Reconciler always reads `entry_data.fields` at upsert time — never a cached or stale event payload — to prevent backfill races from overwriting fresher data.
 - Stdout-based observability is the minimum viable surface. Structured logging (JSON to stdout) is recommended to enable downstream aggregation without coupling the daemons to a specific monitoring stack.
 
-## 6. Open Questions
+## 6. Resolved Decisions
 
-1. **Schema cache TTL.** The ingestion path must notice newly provisioned pages. What is the acceptable staleness window for the schema cache before it refreshes? A TTL of 60s matches the Watcher's default polling interval, but high-throughput bursts during exhaustion may benefit from a shorter TTL.
-2. **Chunk failure semantics.** If a single row in a Reconciler chunk fails (e.g., corrupt JSON in `entry_data.fields`), should the entire chunk be rolled back, or should the failing row be skipped and logged?
-3. **Metric format.** Plain text or structured JSON to stdout? Structured JSON is more useful for aggregation but less readable for manual debugging.
+The three open questions previously listed here have all been answered by ADRs:
+
+1. **Schema cache invalidation** — resolved by [ADR 0015](../adrs/0015-database-as-sole-daemon-coordination-point.md). The schema cache is keyed by a registry-versioned token (the `schema_version` row), not a static TTL; cache refreshes are event-driven by version-row bumps, eliminating the staleness window during exhaustion bursts.
+2. **Chunk failure semantics** — resolved by [ADR 0018](../adrs/0018-reconciler-poison-pill-semantics.md). Poison rows are quarantined in a per-row DLQ and the chunk commits its remaining rows; a single bad row never rolls back the chunk.
+3. **Metric format** — resolved by [ADR 0020](../adrs/0020-structured-logging-mandate.md). NDJSON to stdout is mandatory across all daemons and the API; plain-text logging is removed from the supported surface. The closed event vocabulary for the Watcher and Reconciler is declared in this blueprint's acceptance criteria via the events listed in ADR 0020.
 
 ## 7. Related Documents
 
