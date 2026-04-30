@@ -75,15 +75,12 @@ A holding queue for migration event payloads that failed processing by the dual-
 
 ### Desync Flag
 
-A state indicator signaling that an entry's indexed representation in one or more extension tables is inconsistent with the current schema registry expectations. Two scenarios produce desync:
+A state indicator signaling that an entry's indexed representation in one or more extension tables is inconsistent with the current schema registry expectations. Two scenarios produce desync, both with documented resolution paths:
 
 1. **Row desync** — The extension table row is entirely missing. This occurs during an Exhaustion Fallback: the entry is written to `entry_data` only, and its `entry_id` is enqueued to `stardust_sync_queue`. The Reconciler resolves this by backfilling the missing row once capacity is restored.
-2. **Index desync** — The extension table row exists, but it resides on a page that was provisioned _before_ a field's `is_filterable` flag was changed to `true`. The required B-tree index is absent on that page. Because `ALTER TABLE` on populated pages is forbidden, the index cannot be retroactively added. _(Resolution strategy is an open architectural gap — see note below.)_
+2. **Index desync** — A field's `is_filterable` flag was promoted from `false` to `true` while the field already had a populated, unindexed slot. Because `ALTER TABLE` on populated pages is forbidden ([ADR 0012](adrs/0012-immutable-extension-page-ddl.md)), the existing slot cannot acquire an index in place. Resolution: the field undergoes the **filterability-promotion lifecycle** defined in [ADR 0016](adrs/0016-field-type-change-lifecycle.md) — the unindexed slot is severed and tombstoned, a new indexed slot of the same type is assigned, and the Reconciler backfills it from the JSON payload. While the new slot is `backfilling`, reads fall back to `JSON_EXTRACT` and filters are rejected (the field is unmapped per the Schema Registry contract in [ADR 0017](adrs/0017-schema-registry-as-coordination-contract.md)). Once promoted to `ready`, indexed filtering resumes.
 
-> [!WARNING]
-> Index desync (scenario 2) has no documented resolution mechanism. This is a candidate for a future Architecture Decision Record.
-
-**See also:** Exhaustion Fallback, The Reconciler, `is_filterable`, Page.
+**See also:** Exhaustion Fallback, The Reconciler, `is_filterable`, Page, [ADR 0016](adrs/0016-field-type-change-lifecycle.md), [ADR 0017](adrs/0017-schema-registry-as-coordination-contract.md).
 
 ---
 
@@ -228,10 +225,7 @@ The API's strict enforcement mechanism for unindexed filter attempts. If a consu
 
 A previously proposed runtime mechanism for bounding query execution by tracking scanned rows during query evaluation. This concept has been superseded by Pre-Flight Rejection — strict schema-level enforcement that categorically prevents unindexed queries at the API contract level, eliminating the need for runtime row-count monitoring.
 
-> [!NOTE]
-> The reference to "configurable circuit breaker" in Architecture Blueprint §1 is a stale artifact and should be updated in a future cleanup pass.
-
-**Replaced by:** Pre-Flight Rejection.
+**Replaced by:** Pre-Flight Rejection. See [ADR 0014](adrs/0014-schema-level-safety-over-runtime-circuit-breaking.md).
 
 ---
 
