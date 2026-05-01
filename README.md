@@ -17,18 +17,18 @@ SDDPG serves as the canonical reference for architectural decisions, migration s
 | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | [`architecture_blueprint.md`](architecture_blueprint.md)     | Core Architecture Blueprint — covers Vertical Schema Partitioning, strict resource bounding, API contracts, and read/write paths.                |
 | [`schemas/schema_reference.md`](schemas/schema_reference.md) | ERD & Schema Reference — the single source of truth for the physical schema (core payload, extension tables, and operations queue).              |
-| [`legacy_data_migration.md`](legacy_data_migration.md)       | Operational playbook for migrating historical data — covers asynchronous dual-writes, dead letter queues, backfill pumps, and cutover protocols. |
+| [`legacy_data_migration.md`](legacy_data_migration.md)       | **Stub** — load-bearing migration principles only. Operational details deferred pending blueprint stabilization and legacy method documentation. |
 | [`blueprints/`](blueprints/)                                 | Feature Blueprints — high-level feature descriptions and acceptance criteria, written before implementation begins.                              |
 | [`glossary.md`](glossary.md)                                 | Domain Dictionary — canonical definitions for project-specific terms (e.g., "extension table", "slot", "page"). Eliminates cross-team ambiguity. |
 | [`adrs/`](adrs/)                                             | Architecture Decision Records — immutable log of _why_ key technical decisions were made. Prevents re-litigating settled debates.                |
 
 ## Planned Contents
 
-| Document / Directory                    | Purpose                                                                                                                                                  |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `api/` — API Contract Specification     | Internal API surface documentation — endpoint behavior, error codes, consistency headers. A developer's behavioral reference, not a public OpenAPI spec. |
-| `runbooks/` — Ops Playbook              | Operational procedures: DLQ replay, backfill pump execution, page provisioning, rollback triggers. Reduces bus factor.                                   |
-| `onboarding.md` — Onboarding Guide      | Step-by-step guide for a new developer to set up, understand, and contribute to StarDust.                                                                |
+| Document / Directory                | Purpose                                                                                                                                                  |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api/` — API Contract Specification | Internal API surface documentation — endpoint behavior, error codes, consistency headers. A developer's behavioral reference, not a public OpenAPI spec. |
+| `runbooks/` — Ops Playbook          | Operational procedures: DLQ replay, backfill pump execution, page provisioning, rollback triggers. Reduces bus factor.                                   |
+| `onboarding.md` — Onboarding Guide  | Step-by-step guide for a new developer to set up, understand, and contribute to StarDust.                                                                |
 
 ## Repository Structure
 

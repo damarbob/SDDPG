@@ -1,45 +1,52 @@
-# Legacy Data Migration: Asynchronous Atomicity
+# Legacy Data Migration
 
-This document outlines the operational playbook for migrating existing tenants to the new Vertical Schema Partitioning architecture without locking or threatening the availability of the legacy Virtual Column system.
+> **Status:** Stub — operational details deferred.
+>
+> **Prerequisites for re-authoring:**
+>
+> 1. The Architecture Blueprint reaches a stable baseline. Current cadence is weekly material change, which renders operational specifics obsolete on the order of days.
+> 2. The legacy **Virtual Column Method** is documented to a level that lets a contributor reason about source-side semantics — schema shape, write path, consistency guarantees, known footguns.
+>
+> Until both prerequisites are satisfied, this document records only the load-bearing intent. The principles below are normative for any future migration plan because they are properties of the _transition_, not the destination — they survive blueprint churn. Previously documented specifics (DLQ thresholds, command names, gate sample sizes, message queue choice, replay tooling) have been removed: being specifically wrong is worse than being honestly absent.
 
-## 0. Migration Context & Paradigm Shifts
+## Context
 
-This migration represents a fundamental shift in how the database is utilized to prevent runaway resource consumption at scale. The key transitional shifts are:
+StarDust is migrating from a legacy **Virtual Column Method** (single-table, generated-virtual-column indexing) to **Vertical Schema Partitioning** (`entry_data` + `entry_slots_page_X`; see [`architecture_blueprint.md`](architecture_blueprint.md)). The migration must execute without locking or threatening availability of the legacy system.
 
-- **The Architectural Shift**: This operational playbook governs the active migration from the legacy **Virtual Column Method** (single-table logic) to a 1:1 **Vertical Schema Partitioning (Extension Tables)** strategy (`entry_data` + `entry_slots_page_X`).
-- **Mitigating Strict Page Limits**: To enforce database safety without punishing valid consumer use cases, this migration **introduces a dedicated asynchronous export pattern** (`/api/exports`). This allows us to mandate strict, synchronous cursor-based page limits on our core REST API (`/api/entries`) without abandoning consumers who genuinely rely on bulk data retrieval during the transition.
+## Load-Bearing Principles
 
-## 1. Asynchronous Dual-Write (Event Stream)
+### 1. Synchronous atomic dual-writes are forbidden
 
-Synchronous atomic dual-writes are strictly forbidden.
+The API path writes only to the legacy system synchronously. Replication into the new schema is asynchronous and event-driven. This bounds the latency cost of the migration to the legacy path's performance and guarantees the new schema can never block legacy availability.
 
-- **Phase 1 (The Producer)**: The API synchronous path writes mutations _only_ to the legacy Virtual Columns. Upon success, it emits a domain event (`EntryCreated`, `EntryUpdated_v2`, `EntryDeleted`) to a highly available message queue using `entry_id` as the partition key.
-- **Phase 2 (The Consumer)**: A strictly ordered background worker consumes events and executes idempotent upserts against the new `entry_slots_page_X` tables.
+### 2. The consumer reads the authoritative payload, not the event snapshot
 
-## 2. Dead Letter Queue (DLQ) Lifecycle & Observability
+The consumer worker must read the authoritative source (`entry_data.fields` for the new schema; legacy-equivalent for the source side) at upsert time, never the event payload that triggered it. Stale backfill events must not overwrite fresher real-time updates for the same entry. See [`adrs/0013-json-payload-as-system-of-record.md`](adrs/0013-json-payload-as-system-of-record.md).
 
-If a mapping error occurs, the worker pushes the payload to a DLQ.
+### 3. Cutover is gated, not flagged
 
-- **Alerting**: The system must trigger critical alerts if the DLQ depth exceeds **100 messages** or if the oldest message age exceeds **12 hours**.
-- **Replay Mechanism**: Operators use a dedicated CLI command (`php spark stardust:dlq:replay`) to systematically replay failed messages back into the event stream. The replay worker MUST re-submit messages using the exact same `entry_id` partition key to maintain causal ordering against newly arriving updates.
+Cutover proceeds through a sequence of quantifiable gates — stream-drain, data-parity, optional shadow-traffic. A single boolean "switch traffic to the new schema" flag is insufficient. Each gate is a precondition that must be independently verified before the next is attempted.
 
-## 3. Idempotent & Resumable Backfill Pump
+### 4. Read rollback and write replication are decoupled
 
-A background CLI command iterates over historical records, querying `entry_data` in ascending `id` order, and pushing them into the Event Stream to backfill the extension tables. It maintains state via a `backfill_checkpoints` table for resumability (`--from-id`) and reports throughput metrics to stdout.
+The flag controlling which schema serves reads is independent of the flag controlling whether the event producer is active. If reads roll back to legacy, the producer **must remain active** so the new schema continues shadowing legacy state. Re-cutover must never require a multi-hour cold backfill.
 
-- **Freshness Guarantee**: The consumer worker must always read the authoritative `entry_data.fields` at upsert time, not the event payload snapshot. This prevents stale backfill events from overwriting fresher real-time updates for the same `entry_id`.
+## What This Document Does Not Specify
 
-## 4. Validation & Cutover (Three-Gate Protocol)
+The following were previously specified here and have been intentionally removed pending re-authoring:
 
-Cutover proceeds sequentially through three quantifiable gates:
+- DLQ depth and age alerting thresholds
+- CLI command names for replay, backfill, and checkpoint inspection
+- Backfill checkpoint table shape
+- Gate sample sizes, drain durations, shadow-traffic percentages
+- Message queue technology choice (Kafka, Redis Streams, SQS, etc.)
+- Per-entry idempotency key strategy
+- Rollback acceptance criteria
 
-1. **Stream Drain**: Consumer group lag is `0` continuously for ≥ **15 minutes**.
-2. **Data Parity**: Random-sample dual-read of ≥ 10,000 entries (legacy vs. extension) yields a 100% byte-identical match after key-sorting.
-3. **Shadow Traffic** _(optional)_: Route 5% of reads to the new schema; verify P99 latency and 0 correctness mismatches.
+These will be authored when the prerequisites above are satisfied.
 
-## 5. Safe Rollback Protocol
+## Related Documents
 
-If anomalies are detected post-cutover, an instant rollback to legacy Virtual Columns is executed via a feature flag.
-
-- **Decoupled Operation**: The Rollback (Read) Feature Flag is completely decoupled from the Dual-Write (Producer) Feature Flag.
-- **Shadow Consistency Guarantee**: If read traffic is forcefully reverted to the legacy system, the Event Producer **MUST REMAIN ACTIVE** for all incoming legacy writes. This ensures the experimental extension tables continue to asynchronously shadow the legacy state, preventing data divergence and enabling a future re-cutover attempt without requiring a massive, multi-hour database backfill.
+- [`architecture_blueprint.md`](architecture_blueprint.md) — destination architecture.
+- [`adrs/0007-write-availability-over-query-completeness.md`](adrs/0007-write-availability-over-query-completeness.md) — write-availability principle that informs the async dual-write decision.
+- [`adrs/0013-json-payload-as-system-of-record.md`](adrs/0013-json-payload-as-system-of-record.md) — payload-authority principle that informs the freshness guarantee.
