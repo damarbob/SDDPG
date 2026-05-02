@@ -13,14 +13,16 @@ SDDPG serves as the canonical reference for architectural decisions, migration s
 
 ## Current Contents
 
-| Document                                                     | Description                                                                                                                                      |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [`architecture_blueprint.md`](architecture_blueprint.md)     | Core Architecture Blueprint — covers Vertical Schema Partitioning, strict resource bounding, API contracts, and read/write paths.                |
-| [`schemas/schema_reference.md`](schemas/schema_reference.md) | ERD & Schema Reference — the single source of truth for the physical schema (core payload, extension tables, and operations queue).              |
-| [`legacy_data_migration.md`](legacy_data_migration.md)       | **Stub** — load-bearing migration principles only. Operational details deferred pending blueprint stabilization and legacy method documentation. |
-| [`blueprints/`](blueprints/)                                 | Feature Blueprints — high-level feature descriptions and acceptance criteria, written before implementation begins.                              |
-| [`glossary.md`](glossary.md)                                 | Domain Dictionary — canonical definitions for project-specific terms (e.g., "extension table", "slot", "page"). Eliminates cross-team ambiguity. |
-| [`adrs/`](adrs/)                                             | Architecture Decision Records — immutable log of _why_ key technical decisions were made. Prevents re-litigating settled debates.                |
+| Document                                                                         | Description                                                                                                                                                |
+| -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`architecture_blueprint.md`](architecture_blueprint.md)                         | Core Architecture Blueprint — covers Vertical Schema Partitioning, strict resource bounding, API contracts, and read/write paths.                          |
+| [`schemas/schema_reference.md`](schemas/schema_reference.md)                     | ERD & Schema Reference — the single source of truth for the physical schema (core payload, extension tables, and operations queue).                        |
+| [`legacy_data_migration.md`](legacy_data_migration.md)                           | **Stub** — load-bearing migration principles only. Operational details deferred pending blueprint stabilization and legacy method documentation.           |
+| [`blueprints/`](blueprints/)                                                     | Feature Blueprints — high-level feature descriptions and acceptance criteria, written before implementation begins.                                        |
+| [`glossary.md`](glossary.md)                                                     | Domain Dictionary — canonical definitions for project-specific terms (e.g., "extension table", "slot", "page"). Eliminates cross-team ambiguity.           |
+| [`adrs/`](adrs/)                                                                 | Architecture Decision Records — immutable log of _why_ key technical decisions were made. Prevents re-litigating settled debates.                          |
+| [`blueprints/queryfilter_wire_format.md`](blueprints/queryfilter_wire_format.md) | QueryFilter Wire Format — normative JSON encoding for consumer filter payloads: envelope, node shapes, typed values, error model, and JSON Schema sidecar. |
+| [`schemas/queryfilter.schema.json`](schemas/queryfilter.schema.json)             | JSON Schema (Draft 2020-12) for the v1 QueryFilter wire format. Normative artifact for consumer-side and CI validation.                                    |
 
 ## Planned Contents
 

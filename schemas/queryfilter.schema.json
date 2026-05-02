@@ -1,0 +1,221 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stardust.internal/schemas/queryfilter/v1",
+  "title": "QueryFilter Wire Format — v1",
+  "description": "Normative JSON Schema for the StarDust QueryFilter wire format. Validates structural rules only; value-type compatibility against stardust_fields.declared_type is a runtime check. See blueprints/queryfilter_wire_format.md.",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "1",
+      "default": "1"
+    },
+    "filter": {
+      "$ref": "#/$defs/node"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "node": {
+      "oneOf": [
+        { "$ref": "#/$defs/andNode" },
+        { "$ref": "#/$defs/orNode" },
+        { "$ref": "#/$defs/notNode" },
+        { "$ref": "#/$defs/eqNode" },
+        { "$ref": "#/$defs/neqNode" },
+        { "$ref": "#/$defs/ltNode" },
+        { "$ref": "#/$defs/lteNode" },
+        { "$ref": "#/$defs/gtNode" },
+        { "$ref": "#/$defs/gteNode" },
+        { "$ref": "#/$defs/inNode" },
+        { "$ref": "#/$defs/ninNode" },
+        { "$ref": "#/$defs/prefixNode" },
+        { "$ref": "#/$defs/betweenNode" },
+        { "$ref": "#/$defs/isNullNode" },
+        { "$ref": "#/$defs/isNotNullNode" }
+      ]
+    },
+    "fieldRef": {
+      "type": "object",
+      "properties": {
+        "model": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 }
+      },
+      "required": ["model", "name"],
+      "additionalProperties": false
+    },
+    "scalarValue": {
+      "type": ["string", "number", "boolean"]
+    },
+    "andNode": {
+      "type": "object",
+      "properties": {
+        "op": { "type": "string", "const": "and" },
+        "args": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/node" }
+        }
+      },
+      "required": ["op", "args"],
+      "additionalProperties": false
+    },
+    "orNode": {
+      "type": "object",
+      "properties": {
+        "op": { "type": "string", "const": "or" },
+        "args": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/node" }
+        }
+      },
+      "required": ["op", "args"],
+      "additionalProperties": false
+    },
+    "notNode": {
+      "type": "object",
+      "properties": {
+        "op": { "type": "string", "const": "not" },
+        "arg": { "$ref": "#/$defs/node" }
+      },
+      "required": ["op", "arg"],
+      "additionalProperties": false
+    },
+    "eqNode": {
+      "type": "object",
+      "properties": {
+        "op": { "type": "string", "const": "eq" },
+        "field": { "$ref": "#/$defs/fieldRef" },
+        "value": { "$ref": "#/$defs/scalarValue" }
+      },
+      "required": ["op", "field", "value"],
+      "additionalProperties": false
+    },
+    "neqNode": {
+      "type": "object",
+      "properties": {
+        "op": { "type": "string", "const": "neq" },
+        "field": { "$ref": "#/$defs/fieldRef" },
+        "value": { "$ref": "#/$defs/scalarValue" }
+      },
+      "required": ["op", "field", "value"],
+      "additionalProperties": false
+    },
+    "ltNode": {
+      "type": "object",
+      "properties": {
+        "op": { "type": "string", "const": "lt" },
+        "field": { "$ref": "#/$defs/fieldRef" },
+        "value": { "$ref": "#/$defs/scalarValue" }
+      },
+      "required": ["op", "field", "value"],
+      "additionalProperties": false
+    },
+    "lteNode": {
+      "type": "object",
+      "properties": {
+        "op": { "type": "string", "const": "lte" },
+        "field": { "$ref": "#/$defs/fieldRef" },
+        "value": { "$ref": "#/$defs/scalarValue" }
+      },
+      "required": ["op", "field", "value"],
+      "additionalProperties": false
+    },
+    "gtNode": {
+      "type": "object",
+      "properties": {
+        "op": { "type": "string", "const": "gt" },
+        "field": { "$ref": "#/$defs/fieldRef" },
+        "value": { "$ref": "#/$defs/scalarValue" }
+      },
+      "required": ["op", "field", "value"],
+      "additionalProperties": false
+    },
+    "gteNode": {
+      "type": "object",
+      "properties": {
+        "op": { "type": "string", "const": "gte" },
+        "field": { "$ref": "#/$defs/fieldRef" },
+        "value": { "$ref": "#/$defs/scalarValue" }
+      },
+      "required": ["op", "field", "value"],
+      "additionalProperties": false
+    },
+    "inNode": {
+      "type": "object",
+      "properties": {
+        "op": { "type": "string", "const": "in" },
+        "field": { "$ref": "#/$defs/fieldRef" },
+        "value": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1024,
+          "items": { "$ref": "#/$defs/scalarValue" }
+        }
+      },
+      "required": ["op", "field", "value"],
+      "additionalProperties": false
+    },
+    "ninNode": {
+      "type": "object",
+      "properties": {
+        "op": { "type": "string", "const": "nin" },
+        "field": { "$ref": "#/$defs/fieldRef" },
+        "value": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1024,
+          "items": { "$ref": "#/$defs/scalarValue" }
+        }
+      },
+      "required": ["op", "field", "value"],
+      "additionalProperties": false
+    },
+    "prefixNode": {
+      "type": "object",
+      "properties": {
+        "op": { "type": "string", "const": "prefix" },
+        "field": { "$ref": "#/$defs/fieldRef" },
+        "value": { "type": "string", "minLength": 1, "maxLength": 4096 }
+      },
+      "required": ["op", "field", "value"],
+      "additionalProperties": false
+    },
+    "betweenNode": {
+      "type": "object",
+      "properties": {
+        "op": { "type": "string", "const": "between" },
+        "field": { "$ref": "#/$defs/fieldRef" },
+        "value": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": { "$ref": "#/$defs/scalarValue" }
+        }
+      },
+      "required": ["op", "field", "value"],
+      "additionalProperties": false
+    },
+    "isNullNode": {
+      "type": "object",
+      "properties": {
+        "op": { "type": "string", "const": "is_null" },
+        "field": { "$ref": "#/$defs/fieldRef" }
+      },
+      "required": ["op", "field"],
+      "additionalProperties": false
+    },
+    "isNotNullNode": {
+      "type": "object",
+      "properties": {
+        "op": { "type": "string", "const": "is_not_null" },
+        "field": { "$ref": "#/$defs/fieldRef" }
+      },
+      "required": ["op", "field"],
+      "additionalProperties": false
+    }
+  }
+}

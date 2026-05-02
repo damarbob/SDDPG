@@ -75,7 +75,8 @@ classDiagram
 
 1. **Query translation boundary** — resolved by [ADR 0021](../adrs/0021-search-driver-query-representation.md). `EntrySearchInterface` accepts a StarDust-native `QueryFilter` value object; raw DSL passthrough is rejected. The closed leaf-operator set (`eq`, `neq`, `lt`/`lte`/`gt`/`gte`, `in`/`nin`, `prefix`, `between`, `is_null`/`is_not_null`) plus composite nodes (`and`, `or`, `not`) bound what consumers can express in v1.
 2. **Capability granularity & `is_filterable` jurisdiction** — resolved by [ADR 0022](../adrs/0022-search-driver-capability-jurisdiction.md). Drivers expose a closed capability surface: `supportedOperators()`, `supportsFilterOn(field_id)`, `supportsFuzzySearch()`, `consistencyModel()`. The `is_filterable` registry flag retains MySQL-driver jurisdiction; non-MySQL drivers answer filter-acceptance via `supportsFilterOn`. Pre-flight rejects on either an unsupported operator or `supportsFilterOn(field_id) === false`.
-3. **Multi-driver composition** — out of scope for v1. One active driver per deployment, selected via CI4 service binding. A hybrid-driver routing mode would be a separate ADR if a use case emerges.
+3. **Consumer-facing wire format** — resolved by [blueprints/queryfilter_wire_format.md](queryfilter_wire_format.md). The JSON encoding consumers POST is now normative: tagged `"op"` discriminator, explicit `{"model","name"}` field reference, per-operator `value` shapes, typed-value rules, bounds, and a closed error discriminator set. A normative JSON Schema artifact ships at `schemas/queryfilter.schema.json`.
+4. **Multi-driver composition** — out of scope for v1. One active driver per deployment, selected via CI4 service binding. A hybrid-driver routing mode would be a separate ADR if a use case emerges.
 
 ## 7. Related Documents
 
