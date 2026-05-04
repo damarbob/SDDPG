@@ -17,7 +17,7 @@ The MySQL Native Driver does not implement runtime scanned-row tracking, query-t
 
 The driver relies on three structural guarantees to bound query execution:
 
-1. **Pre-flight rejection** (ADR `0004`): Queries referencing fields without `is_filterable = true` are rejected with `400 Bad Request` before the database is touched.
+1. **Pre-flight rejection** (ADR `0004`): Queries referencing fields without `is_filterable = true` are rejected with a typed exception before the database is touched.
 2. **Bounded page size** (ADR `0005`): The paginated probe touches at most `page_size + 1` rows. The bounded fetch touches at most `page_size` rows.
 3. **Cursor pagination** (ADR `0006`): No `OFFSET` or `COUNT(*)` — every page retrieval is O(page_size).
 

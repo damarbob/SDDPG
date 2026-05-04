@@ -26,11 +26,12 @@ SDDPG serves as the canonical reference for architectural decisions, migration s
 
 ## Planned Contents
 
-| Document / Directory                | Purpose                                                                                                                                                  |
-| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `api/` — API Contract Specification | Internal API surface documentation — endpoint behavior, error codes, consistency headers. A developer's behavioral reference, not a public OpenAPI spec. |
-| `runbooks/` — Ops Playbook          | Operational procedures: DLQ replay, backfill pump execution, page provisioning, rollback triggers. Reduces bus factor.                                   |
-| `onboarding.md` — Onboarding Guide  | Step-by-step guide for a new developer to set up, understand, and contribute to StarDust.                                                                |
+| Document / Directory               | Purpose                                                                                                                |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `runbooks/` — Ops Playbook         | Operational procedures: DLQ replay, backfill pump execution, page provisioning, rollback triggers. Reduces bus factor. |
+| `onboarding.md` — Onboarding Guide | Step-by-step guide for a new developer to set up, understand, and contribute to StarDust.                              |
+
+> HTTP endpoint contracts, request/response wire formats, status codes, auth, and tenant resolution are owned by the separate **StarGate** project (which depends on StarDust via Composer). They are not in scope for SDDPG.
 
 ## Repository Structure
 
@@ -39,13 +40,12 @@ SDDPG/
 ├── README.md
 ├── architecture_blueprint.md
 ├── legacy_data_migration.md
-├── adrs/               # Architecture Decision Records
-├── schemas/            # ERD, schema diagrams
-├── api/                # API contract docs
-├── runbooks/           # Operational playbooks
-├── blueprints/         # Feature blueprints & specs
-├── glossary.md         # Domain dictionary
-└── onboarding.md       # New developer guide
+├── adrs/                    # Architecture Decision Records
+├── schemas/                 # ERD, schema diagrams
+├── runbooks/                # Operational playbooks
+├── blueprints/              # Feature blueprints & specs
+├── glossary.md              # Domain dictionary
+└── onboarding.md            # New developer guide
 ```
 
 ## Conventions

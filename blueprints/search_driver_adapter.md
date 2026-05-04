@@ -6,7 +6,7 @@
 
 ## 1. Problem Statement
 
-StarDust's core read path is a tightly bounded MySQL-native engine. It rejects filters on non-indexed fields with `400 Bad Request` by design (Architecture Blueprint §2.2). This is the correct default for a zero-dependency standalone deployment, but enterprise consumers may eventually need capabilities the native driver cannot provide — full-text search, faceted filtering, fuzzy matching — without rewriting the ingestion or API layers.
+StarDust's core read path is a tightly bounded MySQL-native engine. It rejects filters on non-indexed fields with a typed exception by design (Architecture Blueprint §2.2). This is the correct default for a zero-dependency standalone deployment, but enterprise consumers may eventually need capabilities the native driver cannot provide — full-text search, faceted filtering, fuzzy matching — without rewriting the ingestion or API layers.
 
 The architecture already names an `EntrySearchInterface` and a "Driver/Adapter" pattern (Architecture Blueprint §3) but does not specify the contract, registration mechanism, or behavioral constraints.
 
@@ -15,7 +15,7 @@ The architecture already names an `EntrySearchInterface` and a "Driver/Adapter" 
 - A formal **`EntrySearchInterface`** PHP interface defining the search contract (query input, paginated output, capability declaration).
 - A **`MysqlNativeDriver`** implementing that interface (extracting the current inline read-path logic into a discrete, testable class).
 - A **driver registration / resolution** mechanism at the CI4 service layer, allowing configuration-based driver injection.
-- **Consistency headers** — a response header (e.g., `X-StarDust-Consistency: strong | eventual`) that signals to the consumer which consistency model the active driver provides.
+- **Consistency model introspection** — a `consistencyModel()` method on the interface that returns the active driver's consistency model (`strong` or `eventual`). Callers translate this return value to their own transport contract (e.g., an HTTP header) as needed.
 
 ## 3. Non-Goals
 
@@ -28,8 +28,8 @@ The architecture already names an `EntrySearchInterface` and a "Driver/Adapter" 
 1. `EntrySearchInterface` is a PHP interface with clearly documented method signatures covering: filtered listing (with cursor pagination), single-entry retrieval, and capability introspection (e.g., `supportsFuzzySearch(): bool`).
 2. The existing MySQL read path is encapsulated in `MysqlNativeDriver` implementing `EntrySearchInterface` with zero behavioral changes.
 3. A non-MySQL stub driver can be injected via CI4 service configuration and successfully resolves search queries (returning canned data is acceptable for validation).
-4. Every search response includes an `X-StarDust-Consistency` header reflecting the active driver's consistency model.
-5. If a consumer requests a capability the active driver does not support (e.g., fuzzy search on the native driver), the API returns `400 Bad Request` with a descriptor identifying the unsupported capability.
+4. The driver exposes its consistency model via `consistencyModel(): string` returning `"strong"` or `"eventual"`. Callers surface this value through their own transport layer (e.g., an HTTP header).
+5. If a caller requests a capability the active driver does not support (e.g., fuzzy search on the native driver), the function API throws a typed exception with a `capability_unsupported` discriminator identifying the unsupported capability.
 
 ## 5. Technical Sketch
 
@@ -59,7 +59,7 @@ classDiagram
 
     class SearchService {
         -EntrySearchInterface driver
-        +resolve(Request request) Response
+        +search(QueryFilter filter, Cursor cursor) PaginatedResult
     }
 
     SearchService --> EntrySearchInterface

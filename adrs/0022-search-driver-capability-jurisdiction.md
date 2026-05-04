@@ -5,7 +5,7 @@
 
 ## Context
 
-ADR `0021` establishes that `EntrySearchInterface` accepts a structured `QueryFilter` value object and that the API validates field references and operator support before invoking the driver. ADR `0004` mandates that filters on fields with `is_filterable = false` are rejected with `400 Bad Request` at the API level, before any database interaction.
+ADR `0021` establishes that `EntrySearchInterface` accepts a structured `QueryFilter` value object and that the API validates field references and operator support before invoking the driver. ADR `0004` mandates that filters on fields with `is_filterable = false` are rejected with a typed exception at the function-API boundary, before any database interaction.
 
 These two rules collide cleanly in the MySQL Native Driver: `is_filterable` is the registry's signal that a `(tenant_id, slot_column)` index exists, and the pre-flight rejection prevents queries that would force the optimizer into a full scan or a JSON_EXTRACT-in-WHERE.
 
@@ -26,7 +26,7 @@ The schema registry's `is_filterable` flag retains exclusive jurisdiction over t
 | `supportedOperators(): array`          | Returns the leaf operators (subset of ADR `0021`'s closed set, plus any extension nodes) the driver can execute. Static per driver build.                  |
 | `supportsFilterOn(int $fieldId): bool` | Returns whether the driver can satisfy a filter against the given field — covers `is_filterable` for MySQL and arbitrary index state for external engines. |
 | `supportsFuzzySearch(): bool`, etc.    | Boolean capability declarations matching the existing search-adapter blueprint sketch. One method per coarse capability.                                   |
-| `consistencyModel(): "strong"          | "eventual"`                                                                                                                                                | Drives the `X-StarDust-Consistency` header (already in the blueprint). |
+| `consistencyModel(): "strong"          | "eventual"`                                                                                                                                                | Returns the active driver's consistency guarantee. Callers translate this into their own consumer-facing surface (e.g., a response header). |
 
 The `MysqlNativeDriver` implements `supportsFilterOn($fieldId)` by returning the registry's `is_filterable` flag for that field. External drivers implement it by consulting their own index metadata.
 

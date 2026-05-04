@@ -92,10 +92,10 @@ A `low_cardinality_index` event additionally includes:
 The advisory pipeline only emits events; it does not act. When a `low_cardinality_index` event fires, the operator's options are:
 
 - **Accept** — leave the index in place if the slow scan is tolerable for this workload.
-- **Demote** — set the field's `is_filterable = false`. The standard sever-tombstone-sweep lifecycle (ADR `0009`) reclaims the slot. Filters on this field will then be rejected with `400 Bad Request` per ADR `0004`.
+- **Demote** — set the field's `is_filterable = false`. The standard sever-tombstone-sweep lifecycle (ADR `0009`) reclaims the slot. Filters on this field will then be rejected with a typed exception per ADR `0004`.
 - **Restructure** — split the field into multiple higher-cardinality fields, or model the data differently. Out of architectural scope; an operator/data-modeling decision.
 
-The architecture deliberately does not auto-demote. Auto-demotion would re-introduce unpredictable API behavior — a previously-accepted filter starts returning `400` because cardinality drifted. ADR `0014`'s deterministic-API guarantee covers `is_filterable` flips just as it covers query acceptance: the flag changes only by explicit operator action.
+The architecture deliberately does not auto-demote. Auto-demotion would re-introduce unpredictable function-API behavior — a previously-accepted filter starts failing because cardinality drifted. ADR `0014`'s deterministic-API guarantee covers `is_filterable` flips just as it covers query acceptance: the flag changes only by explicit operator action.
 
 ## Consequences
 

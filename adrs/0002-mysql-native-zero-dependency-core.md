@@ -9,7 +9,7 @@ StarDust is intended to be deployable as a standalone system with a low infrastr
 
 ## Decision
 
-We will ship the core StarDust architecture as a MySQL-native engine with zero mandatory third-party infrastructure dependencies. MySQL is treated as the authoritative transactional store for ingestion and the default bounded read engine for synchronous API access.
+We will ship the core StarDust architecture as a MySQL-native engine with zero mandatory third-party infrastructure dependencies. MySQL is treated as the authoritative transactional store for ingestion and the default bounded read engine for synchronous read access.
 
 Advanced search engines remain optional, not foundational. If a deployment later needs capabilities beyond the native read path, those concerns will be introduced through a separate driver or adapter boundary rather than by changing the core write model or making external search infrastructure a prerequisite for the base product.
 

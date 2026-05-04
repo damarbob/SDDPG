@@ -6,7 +6,7 @@ This document defines the core architecture for StarDust, which utilizes a **Ver
 
 - **Architectural Foundation**: The system utilizes a 1:1 extension table strategy (`entry_data` + `entry_slots_page_X`), optimized strictly as a high-throughput ingestion and discrete retrieval engine.
 - **Strict Resource Bounding**: Ensure MySQL query execution is tightly bounded via pre-flight schema validation and strictly enforced schema indexing, preventing disk spillage of temporary tables without relying on external 3rd-party search infrastructure.
-- **Stable Consumer Contract**: Provide explicit, deterministic API endpoints. The system will gracefully reject unoptimized queries (e.g., filtering on unindexed fields) with a `400 Bad Request` rather than silently degrading database performance.
+- **Stable Function API Contract**: Provide an explicit, deterministic function API. The engine gracefully rejects unoptimized queries (e.g., filtering on unindexed fields) with a typed exception rather than silently degrading database performance.
 - **Extensible Search Architecture (Adapter Pattern)**: Ship the core system as a purely standalone, zero-dependency relational engine to minimize the infrastructural barrier to entry. Future integration with dedicated search engines (e.g., Meilisearch, OpenSearch) is facilitated through an open Driver/Adapter interface at the CodeIgniter 4 application layer.
 - **Operational Resilience**: Guarantee data integrity under degraded states (e.g., slot exhaustion) through a robust fallback queue (`stardust_sync_queue`) and two independent background daemons — **The Watcher** (capacity provisioning) and **The Reconciler** (queue draining) — operating as isolated failure domains.
 
@@ -102,7 +102,7 @@ When a model field's declared type is changed (e.g., `string → int`), its exis
 Indexing decisions are **schema-driven**, governed by the `is_filterable` metadata flag set at model-field registration time.
 
 - If `is_filterable = true` → a composite B-tree index `(tenant_id, slot_column)` is included in the page DDL at provisioning time.
-- If `is_filterable = false` → the slot is used for discrete retrieval only. **Filters against non-filterable fields are strictly forbidden.** To maintain low latency, MySQL will never evaluate `JSON_EXTRACT` inside a `WHERE` clause. If a consumer attempts to filter on an unindexed field, the API will strictly reject the request with an **HTTP 400 Bad Request**. No fallback or suggestions for in-memory bulk filtering will be provided, forcing the consumer to request proper schema provisioning if the filter is a genuine business requirement.
+- If `is_filterable = false` → the slot is used for discrete retrieval only. **Filters against non-filterable fields are strictly forbidden.** To maintain low latency, MySQL will never evaluate `JSON_EXTRACT` inside a `WHERE` clause. If a caller attempts to filter on an unindexed field, the function API rejects the call with a typed exception. No fallback or suggestions for in-memory bulk filtering will be provided, forcing the caller to request proper schema provisioning if the filter is a genuine business requirement.
 - This ensures index provisioning is a deterministic, auditable decision tied to the schema registry.
 
 ### 2.3 Schema Registry (Field-to-Slot Mapping)
@@ -124,20 +124,19 @@ On every write, the payload splitting engine looks up the live `(page, slot_colu
 
 ---
 
-## 3. The API Contract & Consumer Abstraction
+## 3. The Function API & Read Behavior
 
-The API must never leak the physical database design or silently shift consistency models without explicit headers.
+StarDust exposes its read path through a function API consumed via Composer. HTTP wire protocols, status codes, header catalogs, and consumer-facing wire format are the responsibility of the caller (e.g., StarGate). The engine surfaces its capabilities through PHP function signatures and typed exceptions; consumer-side concerns are out of scope.
 
 - **Driver-Based Architecture**:
   - To keep the maintenance layer minimal, StarDust uses a standard `EntrySearchInterface`.
   - The default driver is the **MySQL Native Driver**, which enforces the strict indexing rules defined in Section 2.2.
-  - If future enterprise clients require arbitrary reporting or full-text search, developers can inject a 3rd-party driver (e.g., `MeilisearchDriver`) without altering the core ingestion engine.
-- **API Purity & Predictability**:
-  - Consumers use `/api/entries` for standard synchronous data retrieval.
-  - To minimize the maintenance layer, relying on external 3rd-party services (like OpenSearch) is strongly discouraged. As a standalone engine, StarDust does not perform transparent proxying or dynamic shifts to eventual consistency.
-  - To support scale without breaking the consumer contract, `/api/entries` mandates **Cursor-Based Pagination**. The system never evaluates the total matched set of a query; it only evaluates the requested page (e.g., `LIMIT 50`). This ensures valid business queries are never arbitrarily rejected with 422 errors simply because the result set grew over time.
-  - If a query references a field lacking `is_filterable = true` in the schema registry, the API rejects the request with **HTTP 400 Bad Request** before any database interaction (see Section 4). There is no runtime row-count tracking or query-time abort mechanism — safety is enforced exclusively at the schema-validation layer.
-- **Seamless Field Selection**: Consumers request fields logically using standard query parameters (e.g., `?select=firstName,jobId`). The system dynamically determines if a field requires an `INNER JOIN` against an extension table or a `JSON_EXTRACT(fields, '$.propertyName')` from the core payload on retrieval (select only, never for filtering), automatically merging the final representation. This guarantees that demoted (`is_filterable = false`) or unindexed fields are seamlessly supported via the core payload without squatting on finite physical schema slots.
+  - If future deployments require arbitrary reporting or full-text search, developers can inject a 3rd-party driver (e.g., `MeilisearchDriver`) without altering the core ingestion engine.
+- **Read Behavior**:
+  - The engine's read function returns paginated results using **Cursor-Based Pagination** — every call evaluates only the requested page (e.g., `LIMIT 50`), never the total matched set. Valid business queries are never arbitrarily rejected because the result set grew over time. The opaque cursor encoding consumers see (e.g., a base64 token) is the caller's design; the engine accepts a cursor value and emits the next-page cursor as a return value.
+  - Relying on external 3rd-party services (like OpenSearch) for the default driver is strongly discouraged. As a standalone engine, StarDust does not perform transparent proxying or dynamic shifts to eventual consistency.
+  - If a query references a field lacking `is_filterable = true` in the schema registry, the function rejects with a typed exception before any database interaction (see Section 4). There is no runtime row-count tracking or query-time abort mechanism — safety is enforced exclusively at the schema-validation layer.
+- **Seamless Field Selection**: Callers request fields by name (e.g., `select: ['firstName', 'jobId']`). The engine dynamically determines whether a field requires an `INNER JOIN` against an extension table or a `JSON_EXTRACT(fields, '$.propertyName')` from the core payload on retrieval (select only, never for filtering), automatically merging the final representation. This guarantees that demoted (`is_filterable = false`) or unindexed fields are seamlessly supported via the core payload without squatting on finite physical schema slots.
 
 ---
 
@@ -156,15 +155,15 @@ The read path actively avoids the illusion of dynamically tracking "scanned rows
 
 - **Predictable Execution (No Fallbacks)**: The system does not attempt to catch low-cardinality index scans or "poorly formed queries" dynamically at runtime. Instead, the driver categorically prevents unindexed filtering at the API contract level (as defined in Section 2.2).
 - **Index Responsibility**: The framework delegates the responsibility of query performance—ensuring high index cardinality—entirely to the schema designer. The native driver relies strictly on the `LIMIT {page_size} + 1` bound applied to a covering index in the Paginated Probe (Query 1) to prevent catastrophic application memory spikes. A slow index scan caused by a low-selectivity filter is treated as an architectural configuration failure, not a runtime exception.
-- **Immediate Pre-Flight Rejection**: Any API attempt to filter or sort on a field lacking an explicit `is_filterable = true` registry flag immediately aborts the CodeIgniter 4 request with an **HTTP 400 Bad Request** before the database is ever touched.
+- **Immediate Pre-Flight Rejection**: Any function-API attempt to filter or sort on a field lacking an explicit `is_filterable = true` registry flag immediately aborts at the API boundary with a typed exception before the database is ever touched.
 
 ### 4.2 Asynchronous Exports (Massive Data Retrieval)
 
-To maintain the strict synchronous page limits on `/api/entries` without abandoning consumers who genuinely need massive datasets, StarDust utilizes a dedicated export pattern.
+To maintain the strict synchronous page limits on the read function without abandoning callers who genuinely need massive datasets, StarDust provides an export-job mechanism backed by **The Chronicler**.
 
-- **The `/api/exports` Endpoint**: A consumer posts a large query filter to `/api/exports`. The API accepts the payload, validates the query, and responds immediately with a `202 Accepted` and an export Job ID.
+- **Job submission (engine API)**: The engine exposes a job-submission function that validates a query filter and persists a job record. How the job is _initiated by an external consumer_ (e.g., an HTTP `POST` from a browser to a caller like StarGate) is the caller's concern, not the engine's.
 - **Background Materialization**: **The Chronicler** — an independent background PHP daemon (separate from the Watcher, Reconciler, and Liberator) — picks up the export job. It seamlessly pages through the database using the same Cursor-Based Pagination described above (Query 1 and Query 2 in a loop) and writes the output locally to a streaming CSV or JSON file on disk.
-- **Result Delivery**: Once complete, the consumer can poll the job status and receive a downloaded artifact. This keeps the database safe from massive single-query memory spikes while delivering "the best service" by not forcing clients off the platform for reporting.
+- **Result handoff**: Once the Chronicler completes the artifact, the job record reflects the artifact's filesystem path and final status. Delivery to the end consumer (download semantics, polling, retention windows visible to the consumer) is the caller's domain.
 
 ---
 

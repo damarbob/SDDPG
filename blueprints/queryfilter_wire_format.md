@@ -6,9 +6,9 @@
 
 ## 1. Problem Statement
 
-ADR [`0021`](../adrs/0021-search-driver-query-representation.md) fixes the `QueryFilter` operator set and AST node taxonomy, and ADR [`0022`](../adrs/0022-search-driver-capability-jurisdiction.md) pins the pre-flight capability-check flow. Neither document specifies **how consumers encode a filter as JSON over the wire**. Without a normative wire format, every implementer invents the consumer contract independently — an architectural decision that belongs with the author, not the implementer.
+ADR [`0021`](../adrs/0021-search-driver-query-representation.md) fixes the `QueryFilter` operator set and AST node taxonomy, and ADR [`0022`](../adrs/0022-search-driver-capability-jurisdiction.md) pins the pre-flight capability-check flow. Neither document specifies **how callers encode a filter as JSON when invoking the engine's function API**. Without a normative encoding, every caller invents the contract independently — an architectural decision that belongs with the author, not the implementer.
 
-This blueprint closes that gap. It pins the exact JSON shape for every operator and AST node, the typed-value encoding rules, the validation error model, and a normative JSON Schema artifact that enables consumer-side and CI-side verification against the closed v1 operator set.
+This blueprint closes that gap. It pins the exact JSON shape for every operator and AST node, the typed-value encoding rules, the validation error model, and a normative JSON Schema artifact that enables caller-side and CI-side verification against the closed v1 operator set.
 
 ## 2. Scope
 
@@ -19,19 +19,19 @@ This blueprint closes that gap. It pins the exact JSON shape for every operator 
 - Field reference encoding (`{"model": "...", "name": "..."}`).
 - Typed-value encoding rules for all four `declared_type` values (`string`, `int`, `numeric`, `datetime`).
 - Bounds and limit defaults (nesting depth, total nodes, array sizes, payload size).
-- Validation error model: HTTP status, body shape, closed discriminator set.
+- Validation error model: typed exceptions, structured error discriminators (closed code set).
 - Normative JSON Schema artifact at [`schemas/queryfilter.schema.json`](../schemas/queryfilter.schema.json).
 - Version field and its forward-compatibility semantics.
 
 ## 3. Non-Goals
 
-- Sort field and sort direction (deferred to the future `api/` contract spec — readiness gap #1).
-- Cursor and pagination parameters (same deferral).
-- Response envelope shape (gap #1).
-- Tenant resolution and authentication (gap #3).
+- Sort field and sort direction — caller's domain (StarGate, when authored).
+- Cursor and pagination parameters — caller's domain.
+- Response envelope shape — caller's domain.
+- Tenant resolution and authentication — caller's domain.
 - Capability extension node body shapes — those are declared and documented per-driver alongside the driver's capability ADR.
-- Rate limiting and quota enforcement.
-- Idempotency-key handling.
+- Rate limiting and quota enforcement — caller's domain.
+- Idempotency-key handling — caller's domain.
 
 ## 4. Acceptance Criteria
 
@@ -79,24 +79,17 @@ All limits below are defaults. Operators may tune them via configuration keys; t
 23. Maximum `args` length on a single `and` or `or` node: **64** (contributes toward the 256-node total).
 24. Maximum `in` / `nin` array length: **1024** (enforced per-operator by criterion 9).
 25. Maximum `value` string length: **4096 characters** for `string`-typed fields.
-26. Maximum request payload: **64 KiB** at the HTTP layer. Oversized payloads are rejected before parsing begins.
+26. Maximum filter payload size: **64 KiB**. Callers SHOULD enforce the equivalent at their transport boundary; the engine validates the bound before parsing begins.
 
 ### 4.7 Error model
 
-27. All wire-format and pre-flight violations return **HTTP 400**. The response body is:
+27. Wire-format and pre-flight violations throw a typed validation exception carrying:
+    - a structured **error discriminator** (one of the closed codes below),
+    - a human-readable message,
+    - an **RFC 6901 JSON Pointer** to the offending node within the validated filter (e.g., `/filter/args/1/value/0`),
+    - an optional `details` object with discriminator-specific structured data (e.g., `{"expected": "int", "received": "number"}` for `value_type_mismatch`).
 
-    ```json
-    {
-      "error": {
-        "code": "<discriminator>",
-        "message": "<human-readable>",
-        "path": "<RFC 6901 JSON Pointer to the offending node>",
-        "details": {}
-      }
-    }
-    ```
-
-    `path` is relative to the request body root (e.g., `/filter/args/1/value/0`). `details` carries discriminator-specific structured data (e.g., `{"expected": "int", "received": "number"}` for `value_type_mismatch`).
+    How callers serialize the exception to their downstream consumers (HTTP status code, response body shape, etc.) is the caller's concern.
 
 28. The closed error discriminator set for v1:
 
@@ -286,74 +279,32 @@ All limits below are defaults. Operators may tune them via configuration keys; t
 }
 ```
 
-### Error response examples
-
-**`field_unknown`** — model "invoices" (plural) does not exist:
-
-```json
-{
-  "error": {
-    "code": "field_unknown",
-    "message": "Model 'invoices' not found in schema registry.",
-    "path": "/filter/field/model",
-    "details": { "model": "invoices" }
-  }
-}
-```
-
-**`value_type_mismatch`** — string value on an int field:
-
-```json
-{
-  "error": {
-    "code": "value_type_mismatch",
-    "message": "Field 'amount' has declared_type 'int'; received a JSON string.",
-    "path": "/filter/value",
-    "details": { "declared_type": "int", "received_json_type": "string" }
-  }
-}
-```
-
-**`value_count_mismatch`** — `between` with three bounds:
-
-```json
-{
-  "error": {
-    "code": "value_count_mismatch",
-    "message": "'between' requires exactly 2 elements in value; received 3.",
-    "path": "/filter/value",
-    "details": { "expected": 2, "received": 3 }
-  }
-}
-```
-
 ### Pre-flight sequence
 
 ```mermaid
 sequenceDiagram
-    participant C as Consumer
-    participant A as API
+    participant API as API Boundary
     participant R as Schema Registry
     participant D as Active Driver
 
-    C->>A: POST /api/entries/invoice<br/>{"version":"1","filter":{...}}
-    A->>A: Parse envelope & AST structure<br/>(envelope_malformed, node_malformed)
+    API->>API: Parse envelope & AST structure<br/>(envelope_malformed, node_malformed)
     loop For each leaf node
-        A->>R: Resolve (tenant, model_name, field_name) → field_id
-        R-->>A: field_id | not found
-        A->>A: Reject if not found (field_unknown)
-        A->>D: supportedOperators()
-        D-->>A: operator set
-        A->>A: Reject if op ∉ set (operator_unknown / capability_unsupported)
-        A->>D: supportsFilterOn(field_id)
-        D-->>A: true | false
-        A->>A: Reject if false (field_not_filterable)
+        API->>R: Resolve (tenant, model_name, field_name) → field_id
+        R-->>API: field_id | not found
+        API->>API: Reject if not found (field_unknown)
+        API->>D: supportedOperators()
+        D-->>API: operator set
+        API->>API: Reject if op ∉ set (operator_unknown / capability_unsupported)
+        API->>D: supportsFilterOn(field_id)
+        D-->>API: true | false
+        API->>API: Reject if false (field_not_filterable)
     end
-    A->>A: Validate value types & bounds
-    A->>D: driver.list(validatedFilter, cursor)
-    D-->>A: PaginatedResult
-    A-->>C: 200 + entries + X-StarDust-Consistency
+    API->>API: Validate value types & bounds
+    API->>D: driver.list(validatedFilter, cursor)
+    D-->>API: PaginatedResult
 ```
+
+The function returns the paginated result to its caller. How the caller surfaces it to an end consumer (HTTP status code, response envelope shape, consistency header) is the caller's concern.
 
 ### JSON Schema excerpt
 
@@ -395,7 +346,7 @@ The schema validates structural rules (required keys, `args`/`arg` arity, array 
 
 1. **Tagged `op` discriminator** — every node has an explicit `"op"` key. Chosen for JSON Schema `oneOf` compatibility, alignment with ADR 0021's `supportedOperators()` vocabulary, and unambiguous log-event representation. Confirmed 2026-05-02.
 2. **Explicit field reference object** — `{"model": "...", "name": "..."}` rather than an implicit model (URL-scoped) or flat dotted string. Decouples wire format from URL design; future-proof for cross-model filters; avoids a parser. Confirmed 2026-05-02.
-3. **Scope limited to filter payload** — sort, cursor, and pagination keys are not defined here; they belong in the future `api/` contract spec (gap #1). Confirmed 2026-05-02.
+3. **Scope limited to filter payload** — sort, cursor, and pagination keys are not defined here; they belong with the consumer-facing API layer (StarGate). Confirmed 2026-05-02.
 4. **Normative JSON Schema sidecar** — `schemas/queryfilter.schema.json` is a deliverable of this blueprint, not a follow-up. Enables consumer-side and CI validation against the closed v1 set. Confirmed 2026-05-02.
 5. **Closed v1 leaf-operator set** — `eq`, `neq`, `lt`, `lte`, `gt`, `gte`, `in`, `nin`, `prefix`, `between`, `is_null`, `is_not_null` — per ADR [`0021`](../adrs/0021-search-driver-query-representation.md).
 6. **Capability-surface pre-flight** — `supportedOperators()` + `supportsFilterOn(field_id)` per ADR [`0022`](../adrs/0022-search-driver-capability-jurisdiction.md).

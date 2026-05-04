@@ -51,7 +51,7 @@ The Architecture Blueprint (§2.1) describes two independent background daemons 
 
 ### Exhaustion Fallback
 
-1. When slot capacity is 100% and no pages are available, a write to `/api/entries` still succeeds — `entry_data` is written, extension table write is skipped, and `entry_id` is enqueued to `stardust_sync_queue`.
+1. When slot capacity is 100% and no pages are available, an entry-write call still succeeds — `entry_data` is written, extension table write is skipped, and `entry_id` is enqueued to `stardust_sync_queue`.
 2. Once the Watcher provisions a new page and the Reconciler drains the queue, the previously skipped entry's indexed fields are present in the extension table.
 
 ## 5. Technical Sketch

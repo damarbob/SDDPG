@@ -9,7 +9,7 @@ If StarDust silently permits filters on non-indexed fields, the database may deg
 
 ## Decision
 
-The default MySQL-native API will reject filters and sorts on fields that are not explicitly provisioned as queryable. Requests that violate this rule will fail before touching the database and return `400 Bad Request`.
+The default MySQL-native function API will reject filters and sorts on fields that are not explicitly provisioned as queryable. Calls that violate this rule will fail before touching the database, throwing a typed exception. Callers (e.g., StarGate) translate the exception into their own consumer-facing surface, such as an HTTP `400 Bad Request`.
 
 We will not provide transparent fallback behavior such as `JSON_EXTRACT` filtering, best-effort scans, in-memory post-filtering, or silent routing to a different consistency model. If a field must participate in filtering, that requirement must first be reflected in the schema and index provisioning policy.
 

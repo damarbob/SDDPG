@@ -15,15 +15,6 @@ A MySQL `GET_LOCK()` call used for mutual exclusion during page provisioning. Th
 
 ---
 
-### Asynchronous Exports
-
-The pattern for retrieving massive datasets that exceed synchronous query limits. Consumers submit a query to the `/api/exports` endpoint, which immediately returns a `202 Accepted` and a Job ID. **The Chronicler** then pages through the database using Cursor-Based Pagination and writes the output to a file. This ensures the strict memory restrictions on synchronous endpoints are not bypassed.
-
-**Aliases:** Background Materialization.
-**See also:** The Chronicler, Cursor-Based Pagination.
-
----
-
 ### Backfill Pump
 
 A CLI command (`php spark stardust:backfill`) that iterates over historical `entry_data` records in ascending `id` order and pushes them into the event stream for replication into extension tables. It maintains state via a `backfill_checkpoints` table, allowing resumability (`--from-id`) and reports throughput metrics to stdout. Used during legacy data migration.
@@ -40,14 +31,6 @@ The second query in the Two-Query Approach (Query 2). After the Paginated Probe 
 
 ---
 
-### Consistency Header
-
-An HTTP response header (`X-StarDust-Consistency`) included in every search response. Its value reflects the active search driver's consistency model: `strong` for the MySQL Native Driver (reads from the transactional store) or `eventual` for drivers backed by asynchronous indexes. Enables consumers to make informed caching and retry decisions.
-
-**See also:** `EntrySearchInterface`, Driver/Adapter Pattern.
-
----
-
 ### Core Payload Table
 
 The primary transactional storage table for all entries. Physically named `entry_data`. Stores the complete, unindexed JSON payload in a `fields` column alongside system timestamps and tenant/model identifiers. Every entry in StarDust has exactly one row in this table regardless of extension table state.
@@ -59,7 +42,7 @@ The primary transactional storage table for all entries. Physically named `entry
 
 ### Cursor-Based Pagination
 
-The pagination strategy mandated by the StarDust API. Instead of `OFFSET`-based pagination (which degrades at depth), queries use `WHERE id > :cursor ORDER BY id ASC LIMIT {page_size} + 1`. The `+1` row determines whether a next page exists. The system never evaluates the total matched set of a query, ensuring constant-time pagination regardless of dataset size.
+The pagination strategy enforced by StarDust's function API. Instead of `OFFSET`-based pagination (which degrades at depth), queries use `WHERE id > :cursor ORDER BY id ASC LIMIT {page_size} + 1`. The `+1` row determines whether a next page exists. The system never evaluates the total matched set of a query, ensuring constant-time pagination regardless of dataset size.
 
 **See also:** Paginated Probe, Two-Query Approach.
 
@@ -110,7 +93,7 @@ The physical MySQL table name for the Core Payload Table.
 
 ### `EntrySearchInterface`
 
-A PHP interface defining the search driver contract for StarDust's read path. Method signatures cover: filtered listing with cursor pagination, single-entry retrieval, and capability introspection (e.g., `supportsFuzzySearch(): bool`). If a consumer requests a capability the active driver does not support, the API returns `400 Bad Request`.
+A PHP interface defining the search driver contract for StarDust's read path. Method signatures cover: filtered listing with cursor pagination, single-entry retrieval, and capability introspection (e.g., `supportsFuzzySearch(): bool`). If a caller requests a capability the active driver does not support, the function API rejects the call with a typed exception.
 
 **See also:** Driver/Adapter Pattern, MySQL Native Driver.
 
@@ -159,7 +142,7 @@ Two decoupled feature flags used during legacy data migration. The **Read Featur
 
 ### `is_filterable`
 
-A boolean metadata flag in the schema registry, set at model-field registration time. When `true`, a composite B-tree index `(tenant_id, slot_column)` is included in the extension table DDL at page provisioning time. When `false`, the slot is used for discrete retrieval only — any API attempt to filter on that field is rejected with `400 Bad Request` before the database is touched.
+A boolean metadata flag in the schema registry, set at model-field registration time. When `true`, a composite B-tree index `(tenant_id, slot_column)` is included in the extension table DDL at page provisioning time. When `false`, the slot is used for discrete retrieval only — any function-API attempt to filter on that field is rejected with a typed exception before the database is touched.
 
 **See also:** Slot, Index Provisioning Policy, Pre-Flight Rejection.
 
@@ -183,7 +166,7 @@ A user-defined data structure (schema) within a tenant, identified by `model_id`
 
 ### MySQL Native Driver
 
-The default implementation of `EntrySearchInterface`. Executes queries directly against MySQL using the strict indexing rules defined in the Index Provisioning Policy. Reports `X-StarDust-Consistency: strong`. Rejects filters on non-indexed fields with `400 Bad Request`.
+The default implementation of `EntrySearchInterface`. Executes queries directly against MySQL using the strict indexing rules defined in the Index Provisioning Policy. Reports `consistencyModel(): "strong"` (callers translate this into their own consumer-facing surface). Rejects filters on non-indexed fields with a typed exception.
 
 **See also:** `EntrySearchInterface`, Driver/Adapter Pattern, Pre-Flight Rejection.
 
@@ -215,7 +198,7 @@ The write-path component responsible for separating an entry's data into two des
 
 ### Pre-Flight Rejection
 
-The API's strict enforcement mechanism for unindexed filter attempts. If a consumer requests a filter or sort on a field lacking `is_filterable = true` in the schema registry, the CodeIgniter 4 request is immediately aborted with `400 Bad Request` before the database is ever touched. This replaces the earlier "Scanned Row Circuit Breaker" concept.
+The function API's strict enforcement mechanism for unindexed filter attempts. If a caller requests a filter or sort on a field lacking `is_filterable = true` in the schema registry, the call is immediately aborted at the API boundary with a typed exception before the database is ever touched. This replaces the earlier "Scanned Row Circuit Breaker" concept.
 
 **See also:** `is_filterable`, Index Provisioning Policy, ~~Scanned Row Circuit Breaker~~.
 
@@ -295,9 +278,9 @@ The top-level data isolation boundary in StarDust, identified by `tenant_id`. Al
 
 ### The Chronicler
 
-An independent background PHP daemon responsible exclusively for materializing asynchronous export jobs. It claims pending jobs from the exports queue via `SELECT ... FOR UPDATE SKIP LOCKED`, pages through the database using the same Cursor-Based Pagination and Two-Query Approach used by the synchronous read path, and streams the output to a local file on disk (CSV or JSON). Each database operation remains bounded by `page_size`, ensuring the transactional database is never subjected to unbounded queries during export materialization. The Chronicler is independent of the Watcher, Reconciler, and Liberator — it does not interact with the schema registry and does not participate in daemon-to-daemon coordination (ADR `0015`).
+An independent background PHP daemon responsible exclusively for materializing export jobs. It claims pending jobs from the exports queue via `SELECT ... FOR UPDATE SKIP LOCKED`, pages through the database using the same Cursor-Based Pagination and Two-Query Approach used by the synchronous read path, and streams the output to a local file on disk (CSV or JSON). Each database operation remains bounded by `page_size`, ensuring the transactional database is never subjected to unbounded queries during export materialization. The Chronicler is independent of the Watcher, Reconciler, and Liberator — it does not interact with the schema registry and does not participate in daemon-to-daemon coordination (ADR `0015`). How export jobs are _submitted_ (HTTP endpoint, request shape, polling) is the caller's domain.
 
-**See also:** Asynchronous Exports, Cursor-Based Pagination, Two-Query Approach.
+**See also:** Cursor-Based Pagination, Two-Query Approach, [`blueprints/chronicler_daemon.md`](blueprints/chronicler_daemon.md).
 
 ---
 

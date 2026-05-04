@@ -39,8 +39,8 @@ Each leaf node carries the field's `(model_id, field_name)` reference, the opera
 
 Drivers translate `QueryFilter` to backend syntax. The API never inspects the translation result, but the API does enforce two invariants on input:
 
-1. Every leaf node's `field_name` MUST resolve to a field in `stardust_fields`. Unknown fields are rejected at the API with `400 Bad Request` before the driver is invoked.
-2. Every leaf node's `op` MUST be in the closed list above OR in a capability-declared extension list. Unsupported operators on the active driver are rejected at the API with `400 Bad Request` carrying a `capability_unsupported` discriminator.
+1. Every leaf node's `field_name` MUST resolve to a field in `stardust_fields`. Unknown fields are rejected at the API boundary with a typed exception before the driver is invoked.
+2. Every leaf node's `op` MUST be in the closed list above OR in a capability-declared extension list. Unsupported operators on the active driver are rejected at the API boundary with a typed exception carrying a `capability_unsupported` discriminator.
 
 Pre-flight validation (`is_filterable`) and schema-cache lookups operate on the resolved field references, not on raw strings. This is what allows ADR `0004` and ADR `0014` to remain operational across drivers — the validation has structural evidence to act on.
 
@@ -56,14 +56,14 @@ Pre-flight validation (`is_filterable`) and schema-cache lookups operate on the 
 
 **Negative:**
 
-- Drivers cannot expose capabilities the `QueryFilter` schema does not model. Adding (e.g.) faceted aggregations requires extending the value object via ADR review, not a one-off driver-specific endpoint. This is intentional friction — preserving the consumer-facing contract.
+- Drivers cannot expose capabilities the `QueryFilter` schema does not model. Adding (e.g.) faceted aggregations requires extending the value object via ADR review, not a one-off driver-specific extension. This is intentional friction — preserving a unified function-API contract.
 - Translation cost is paid per request. For drivers with rich native query languages, the translation step may be non-trivial. Caching translated forms is a driver-internal optimization.
 - The closed leaf-operator set bounds what consumers can express in v1. A consumer wanting (e.g.) a regex filter is rejected even if the active driver could trivially support it; the path is to add `regex` to the operator set via a future ADR.
 
 **Rejected alternatives:**
 
 - **Raw DSL passthrough** — defeats pre-flight rejection (the API has no structural view of the query), forces consumers to know the active driver, and silently breaks the structured-log event vocabulary. The alleged benefit ("expose every backend capability") is achievable through capability-extension nodes without sacrificing the consumer contract.
-- **Separate endpoint per driver** (`/api/entries/mysql`, `/api/entries/meili`) — externalizes the driver choice into the URL space, defeating the entire point of a pluggable driver. Consumer code must branch on URL; deployments must coordinate consumer config with backend selection.
+- **Separate function-API per driver** (e.g., `MysqlEntries`, `MeiliEntries` classes or driver-suffixed method names) — externalizes the driver choice into the API surface, defeating the entire point of a pluggable driver. Caller code must branch on driver identity; deployments must coordinate caller config with backend selection.
 - **OpenAPI-style query-language synthesis** (e.g., GraphQL) — over-engineered for the matched-rows-with-cursor problem. The `QueryFilter` value object is a thin tree; full GraphQL adds parser, validator, executor, and tooling without a corresponding need.
 - **Ad-hoc string DSL parsed centrally** (e.g., RHS-bracket syntax `?filter[status][in]=open,pending`) — a syntactic veneer over the same value object, but encoding rules vary across HTTP clients, URL encoders, and JSON shapes. The value object as a JSON body is unambiguous; the URL-DSL is not.
 
