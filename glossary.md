@@ -48,6 +48,14 @@ The pagination strategy enforced by StarDust's function API. Instead of `OFFSET`
 
 ---
 
+### Coercion Failure
+
+The Reconciler outcome when a JSON payload value cannot be coerced into the target slot column's type during retype backfill (e.g., `string → int` on the value `"42abc"`, or any of the four categorically-rejected `int↔datetime` / `numeric↔datetime` cells). The slot column receives `NULL`; the JSON payload at `entry_data.fields` remains the authoritative system of record per [ADR 0013](adrs/0013-json-payload-as-system-of-record.md), so reads fall back to `JSON_EXTRACT` without permanent data loss. Coercion failures are explicitly NOT poison pills (they never quarantine to `stardust_reconciler_dlq`); each emits a `coercion_null` structured-log event for operator audit. The full per-type-pair predicate is normative in [ADR 0024](adrs/0024-type-coercion-matrix-for-retype-backfill.md).
+
+**See also:** The Reconciler, Tombstoned Slot, [ADR 0016](adrs/0016-field-type-change-lifecycle.md), [ADR 0024](adrs/0024-type-coercion-matrix-for-retype-backfill.md).
+
+---
+
 ### Dead Letter Queue (DLQ)
 
 A holding queue for migration event payloads that failed processing by the dual-write consumer worker. Monitored with alerting thresholds: critical alerts fire if DLQ depth exceeds 100 messages or the oldest message age exceeds 12 hours. Failed messages are replayed via `php spark stardust:dlq:replay`, which re-submits using the original `entry_id` partition key to preserve causal ordering.

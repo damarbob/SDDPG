@@ -247,7 +247,7 @@ The authoritative field-to-slot mapping. One row per physical slot column per pa
 
 ### 4.5 Slot Status State Machine
 
-Each transition acts on a single `stardust_slot_assignments` row. A retype involves two rows — the old slot's `assigned → tombstoned` transition and the new slot's `free → backfilling` transition commit in the same transaction (§4.6 invariant #2).
+Each transition acts on a single `stardust_slot_assignments` row. A retype involves two rows — the old slot's `assigned → tombstoned` transition and the new slot's `free → backfilling` transition commit in the same transaction (§4.6 invariant #2). The Reconciler's coercion predicate during the `backfilling` phase — which JSON value / target-type pairs succeed and which produce `NULL` — is normative in [ADR `0024`](../adrs/0024-type-coercion-matrix-for-retype-backfill.md).
 
 ```mermaid
 stateDiagram-v2

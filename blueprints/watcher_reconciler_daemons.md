@@ -101,7 +101,41 @@ The three open questions previously listed here have all been answered by ADRs:
 2. **Chunk failure semantics** — resolved by [ADR 0018](../adrs/0018-reconciler-poison-pill-semantics.md). Poison rows are quarantined in a per-row DLQ and the chunk commits its remaining rows; a single bad row never rolls back the chunk.
 3. **Metric format** — resolved by [ADR 0020](../adrs/0020-structured-logging-mandate.md). NDJSON to stdout is mandatory across all daemons and the API; plain-text logging is removed from the supported surface. The closed event vocabulary for the Watcher and Reconciler is declared in this blueprint's acceptance criteria via the events listed in ADR 0020.
 
-## 7. Related Documents
+## 7. Reconciler Event Payloads
+
+The closed event-name vocabulary for `source: "reconciler"` lives in [ADR 0020 §Event Vocabulary](../adrs/0020-structured-logging-mandate.md). Per-event payload sub-fields layered on top of the standard daemon fields (`ts`, `level`, `source`, `event`, `tenant_id`, `correlation_id`) are pinned here.
+
+### `coercion_null`
+
+Emitted when the Reconciler attempts to coerce a JSON payload value into a typed slot column during retype backfill (per [ADR 0024](../adrs/0024-type-coercion-matrix-for-retype-backfill.md)) and the coercion fails. The slot column receives `NULL`; the JSON payload remains authoritative (ADR [`0013`](../adrs/0013-json-payload-as-system-of-record.md)); reads fall back to `JSON_EXTRACT`. The event is NOT emitted when the JSON value was already absent or already JSON `null` (no coercion was attempted).
+
+| Field                | Type                                                 | Description                                                                                                                              |
+| :------------------- | :--------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------- |
+| `level`              | `"warn"`                                             | Fixed. Operationally surprising (caller-visible NULL in indexed view) but not data-loss (JSON authoritative).                            |
+| `source`             | `"reconciler"`                                       | Fixed.                                                                                                                                   |
+| `event`              | `"coercion_null"`                                    | Fixed.                                                                                                                                   |
+| `tenant_id`          | integer                                              | Tenant of the affected entry. Required (this event is always tenant-scoped).                                                             |
+| `correlation_id`     | string (UUID)                                        | Per-chunk correlation ID. Lets operators trace this event to the chunk's `chunk_complete` event.                                         |
+| `chunk_id`           | integer                                              | Reconciler chunk identifier; also carried on `chunk_claimed` / `chunk_complete` for joinability.                                         |
+| `field_id`           | integer                                              | The retyping field's `stardust_fields.id`.                                                                                               |
+| `slot_assignment_id` | integer                                              | The new slot (in `backfilling` status per ADR 0017) receiving the `NULL`. Aggregate per-retype-operation here.                           |
+| `entry_id`           | integer                                              | The affected `entry_data.id`. Lets operators inspect the original JSON payload for triage.                                               |
+| `source_type`        | `"string"` \| `"int"` \| `"numeric"` \| `"datetime"` | Field's pre-retype `declared_type`.                                                                                                      |
+| `target_type`        | `"string"` \| `"int"` \| `"numeric"` \| `"datetime"` | Field's post-retype `declared_type`.                                                                                                     |
+| `reason`             | string (closed set — see below)                      | Closed taxonomy keyed to the failure modes in ADR 0024's matrix.                                                                         |
+
+**Reason taxonomy:**
+
+- `out_of_range` — value parsed but exceeded the target type's representable range (e.g., `string → int` value `"99999999999999999999"`; signed-64-bit overflow).
+- `non_integer` — `numeric → int` source was not integer-valued (e.g., `42.5`).
+- `malformed_datetime` — `string → datetime` value did not satisfy strict RFC 3339 with explicit offset.
+- `malformed_number` — `string → int` or `string → numeric` value did not satisfy the target type's grammar (e.g., `"42abc"`, `"42.0"` for `string → int`).
+- `epoch_coercion_rejected` — fell into one of the four cells the matrix rejects categorically (`int ↔ datetime`, `numeric ↔ datetime`).
+- `unparseable` — JSON value's structural type (object, array, boolean) was incompatible with the source `declared_type`. Should be rare; surfaces out-of-band JSON edits or chained-retype anomalies.
+
+Operators MUST monitor `coercion_null` event volume per active backfill (correlated by `slot_assignment_id`). A non-zero rate over a meaningful sample of the tenant/model partition is the only signal that retype-incompatible data is being silently NULL'd in the new slot column.
+
+## 8. Related Documents
 
 - [Architecture Blueprint §2.1 — Automated Page Provisioning & Exhaustion Fallback](../architecture_blueprint.md)
 - [Architecture Blueprint §2.1.1 — The Watcher](../architecture_blueprint.md)
