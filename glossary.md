@@ -17,9 +17,9 @@ A MySQL `GET_LOCK()` call used for mutual exclusion during page provisioning. Th
 
 ### Backfill Pump
 
-A CLI command (`php spark stardust:backfill`) that iterates over historical `entry_data` records in ascending `id` order and pushes them into the event stream for replication into extension tables. It maintains state via a `backfill_checkpoints` table, allowing resumability (`--from-id`) and reports throughput metrics to stdout. Used during legacy data migration.
+A CLI command (`php spark stardust:backfill`) that iterates over historical `entry_data` records in ascending `id` order and pushes them into the event stream for replication into extension tables. It maintains state via a `backfill_checkpoints` table (see [`schemas/schema_reference.md`](schemas/schema_reference.md) §5.4), allowing resumability (`--from-id`) and reports throughput metrics to stdout. Used during legacy data migration.
 
-**See also:** Dual-Write, Dead Letter Queue.
+**See also:** Dual-Write, Dead Letter Queue, `backfill_checkpoints`.
 
 ---
 
@@ -249,6 +249,30 @@ The capacity exhaustion anti-pattern where fields that are no longer filterable 
 The temporal deletion strategy used by StarDust. Entries are never physically removed via `DELETE`; instead, the `deleted_at` column on `entry_data` is set to the deletion timestamp. The composite index `(tenant_id, deleted_at, created_at)` supports efficient queries that exclude soft-deleted records.
 
 **See also:** Entry, Core Payload Table.
+
+---
+
+### `stardust_export_jobs`
+
+The physical MySQL table name for the Chronicler's async export job queue (see [`schemas/schema_reference.md`](schemas/schema_reference.md) §5.2). Rows transition through `pending → processing → completed | failed`; Chronicler workers claim pending rows via `SELECT ... FOR UPDATE SKIP LOCKED` ordered by per-tenant round-robin position. The 24-hour artifact TTL, 5 GB artifact cap, and ≤ 3 active jobs per tenant are policy from [ADR 0010](adrs/0010-asynchronous-exports.md); daemon-side claim and GC semantics live in [`blueprints/chronicler_daemon.md`](blueprints/chronicler_daemon.md).
+
+**See also:** The Chronicler, Cursor-Based Pagination, Two-Query Approach.
+
+---
+
+### `stardust_reconciler_dlq`
+
+The physical MySQL table name for the Reconciler's per-row poison-pill quarantine (see [`schemas/schema_reference.md`](schemas/schema_reference.md) §5.3). One row per quarantined entry, distinguished by a `source` discriminator (`sync_queue` or `bulk_import`) so the two Reconciler workloads share one operator surface. Replay is operator-initiated only (`php spark stardust:reconciler:dlq:replay`); there is no automatic retry and no automatic TTL. Fully specified by [ADR 0018](adrs/0018-reconciler-poison-pill-semantics.md). Distinct from the migration **Dead Letter Queue (DLQ)** above, which holds dual-write replication failures rather than indexed-materialization failures.
+
+**See also:** The Reconciler, Dead Letter Queue, [ADR 0018](adrs/0018-reconciler-poison-pill-semantics.md).
+
+---
+
+### `stardust_schema_version`
+
+The physical MySQL table name for the registry version counter (see [`schemas/schema_reference.md`](schemas/schema_reference.md) §5.1). A single-row singleton holding a monotonically increasing `version` column. Every transaction that mutates coordination-relevant registry state — page provisioning, slot-status transitions, field metadata changes — increments `version` in the same transaction as the underlying mutation. Read on every API write path as the cache-invalidation token defined by [ADR 0015](adrs/0015-database-as-sole-daemon-coordination-point.md).
+
+**See also:** Schema Registry, [ADR 0015](adrs/0015-database-as-sole-daemon-coordination-point.md), [ADR 0017](adrs/0017-schema-registry-as-coordination-contract.md).
 
 ---
 

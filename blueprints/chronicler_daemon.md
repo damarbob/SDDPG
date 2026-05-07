@@ -10,6 +10,8 @@ The Chronicler is the engine-side daemon responsible for materializing export jo
 
 This blueprint consolidates them. It is a **stub** — it preserves the engine-side decisions made elsewhere but does not yet bring them to Liberator-grade rigor (formal acceptance criteria, structured-log event vocabulary, exhaustive failure-mode coverage). Closing those gaps is the follow-up that resolves problem #6 of [`sddpg_implementation_readiness.md`](../sddpg_implementation_readiness.md).
 
+> The canonical `stardust_export_jobs` table shape (columns, indexes, constraints) lives in [`schemas/schema_reference.md`](../schemas/schema_reference.md) §5.2. This blueprint references the table by name; the schema reference is normative.
+
 ## 2. Scope
 
 - **The Chronicler**: A multi-worker PHP CLI daemon (`php spark stardust:chronicler`) that:
