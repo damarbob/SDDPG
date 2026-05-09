@@ -14,6 +14,19 @@ This document defines the core architecture for StarDust, which utilizes a **Ver
 
 StarDust targets MySQL 8.0.13 or newer (Percona Server 8.0.13+ is supported on the same basis). Older MySQL versions and MariaDB are explicitly out of scope: the schema registry's atomicity invariants rely on partial unique indexes, the registry diagnostic queries rely on common table expressions, and the operator runbooks for cardinality advisories rely on `EXPLAIN ANALYZE` — all of which require the 8.0.13 floor. Implementations may not target older versions; no compatibility shim or generated-column workaround is supported.
 
+### 1.2 Multi-Tenancy Boundary
+
+StarDust enforces **tenant isolation** — it does not perform tenant resolution or tenant management. These two halves of multi-tenancy are owned at different layers:
+
+- **StarDust (isolation).** Every query, daemon sweep, and export job carries a `tenant_id` predicate. Composite indexes lead with `tenant_id`. Cross-tenant access is forbidden by default; any future operation that genuinely needs it (admin tooling, fleet metrics) must be a separately named function with its own structured-log event.
+- **StarGate (resolution + management).** StarGate — the HTTP consumer of StarDust — owns authentication, the caller-credential → `tenant_id` mapping, and all tenant lifecycle operations (CRUD, provisioning, deactivation, quota policy). These are out of scope for StarDust entirely.
+
+#### Engine boundary contract
+
+`tenant_id` is a **positive `BIGINT`** (integer in `[1, 2^63-1]`). StarDust validates this shape at every function-API entry point but does not re-authenticate its value — it trusts the caller for authorization, never for shape. StarGate is responsible for mapping external identifiers (UUIDs, slugs, JWT subject claims) to this `BIGINT` before calling into the engine.
+
+See §4 for read-path enforcement (`tenant_id` conditions on all `INNER JOIN` paths).
+
 ---
 
 ## 2. Technical Specifications & Storage Strategy

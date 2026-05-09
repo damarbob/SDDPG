@@ -31,7 +31,7 @@ SDDPG serves as the canonical reference for architectural decisions, migration s
 | `runbooks/` — Ops Playbook         | Operational procedures: DLQ replay, backfill pump execution, page provisioning, rollback triggers. Reduces bus factor. |
 | `onboarding.md` — Onboarding Guide | Step-by-step guide for a new developer to set up, understand, and contribute to StarDust.                              |
 
-> HTTP endpoint contracts, request/response wire formats, status codes, auth, and tenant resolution are owned by the separate **StarGate** project (which depends on StarDust via Composer). They are not in scope for SDDPG.
+> HTTP endpoint contracts, request/response wire formats, status codes, auth, tenant resolution, and tenant management are owned by the separate **StarGate** project (which depends on StarDust via Composer). They are not in scope for SDDPG.
 
 ## Repository Structure
 
