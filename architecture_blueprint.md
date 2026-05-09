@@ -7,7 +7,7 @@ This document defines the core architecture for StarDust, which utilizes a **Ver
 - **Architectural Foundation**: The system utilizes a 1:1 extension table strategy (`entry_data` + `entry_slots_page_X`), optimized strictly as a high-throughput ingestion and discrete retrieval engine.
 - **Strict Resource Bounding**: Ensure MySQL query execution is tightly bounded via pre-flight schema validation and strictly enforced schema indexing, preventing disk spillage of temporary tables without relying on external 3rd-party search infrastructure.
 - **Stable Function API Contract**: Provide an explicit, deterministic function API. The engine gracefully rejects unoptimized queries (e.g., filtering on unindexed fields) with a typed exception rather than silently degrading database performance.
-- **Extensible Search Architecture (Adapter Pattern)**: Ship the core system as a purely standalone, zero-dependency relational engine to minimize the infrastructural barrier to entry. Future integration with dedicated search engines (e.g., Meilisearch, OpenSearch) is facilitated through an open Driver/Adapter interface at the CodeIgniter 4 application layer.
+- **Extensible Search Architecture (Adapter Pattern)**: Ship the core system as a purely standalone, zero-dependency relational engine to minimize the infrastructural barrier to entry. Future integration with dedicated search engines (e.g., Meilisearch, OpenSearch) is facilitated through an open Driver/Adapter interface, with driver selection performed via the engine's public construction API.
 - **Operational Resilience**: Guarantee data integrity under degraded states (e.g., slot exhaustion) through a robust fallback queue (`stardust_sync_queue`) and two independent background daemons — **The Watcher** (capacity provisioning) and **The Reconciler** (queue draining) — operating as isolated failure domains.
 
 ### 1.1 Operating Environment
@@ -155,7 +155,7 @@ StarDust exposes its read path through a function API consumed via Composer. HTT
 
 ## 4. The Read Path: Bounded Query Execution
 
-The CodeIgniter 4 query builder ensures InnoDB is protected from runaway materialize operations without punishing consumers for large datasets.
+The engine's prepared-statement query layer ensures InnoDB is protected from runaway materialize operations without punishing consumers for large datasets. StarDust ships its own query plumbing rather than depending on a framework's query builder.
 
 - **Tenant Isolation**: Secure all `INNER JOIN` conditions by enforcing `tenant_id` matches across all pages.
 - **Deterministic Late Row Lookups (Two-Query Approach)**: Cross-page queries and complex filters must never be executed as a single, potentially unbound `INNER JOIN`. To guarantee bounded execution and prevent disk spillage, the executor enforces a strict two-step process:

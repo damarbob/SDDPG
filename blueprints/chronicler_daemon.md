@@ -13,7 +13,7 @@ What none of those provide is a feature-level specification — testable accepta
 
 ## 2. Scope
 
-- **The Chronicler**: A multi-worker PHP CLI daemon (`php spark stardust:chronicler`) that:
+- **The Chronicler**: A multi-worker PHP CLI daemon (`bin/stardust chronicler`) that:
   - Polls `stardust_export_jobs` for unclaimed pending work, ordered by per-tenant round-robin position to enforce noisy-neighbor fairness.
   - Claims pending jobs via `SELECT ... FOR UPDATE SKIP LOCKED`, marking the row `processing` and recording `worker_identity`, `claimed_at`, and `heartbeat_at` in the same transaction.
   - Periodically polls for abandoned claims (`status='processing' AND heartbeat_at < NOW() - INTERVAL <lease_timeout> SECOND`) and re-claims them, deleting any partial artifact and resuming from `last_cursor` per [ADR 0025](../adrs/0025-chronicler-failure-semantics.md) Commitment 1.

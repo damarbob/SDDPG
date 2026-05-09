@@ -17,7 +17,7 @@ A MySQL `GET_LOCK()` call used for mutual exclusion during page provisioning. Th
 
 ### Backfill Pump
 
-A CLI command (`php spark stardust:backfill`) that iterates over historical `entry_data` records in ascending `id` order and pushes them into the event stream for replication into extension tables. It maintains state via a `backfill_checkpoints` table (see [`schemas/schema_reference.md`](schemas/schema_reference.md) §5.4), allowing resumability (`--from-id`) and reports throughput metrics to stdout. Used during legacy data migration.
+A CLI command (`bin/stardust backfill`) that iterates over historical `entry_data` records in ascending `id` order and pushes them into the event stream for replication into extension tables. It maintains state via a `backfill_checkpoints` table (see [`schemas/schema_reference.md`](schemas/schema_reference.md) §5.4), allowing resumability (`--from-id`) and reports throughput metrics to stdout. Used during legacy data migration.
 
 **See also:** Dual-Write, Dead Letter Queue, `backfill_checkpoints`.
 
@@ -58,7 +58,7 @@ The Reconciler outcome when a JSON payload value cannot be coerced into the targ
 
 ### Dead Letter Queue (DLQ)
 
-A holding queue for migration event payloads that failed processing by the dual-write consumer worker. Monitored with alerting thresholds: critical alerts fire if DLQ depth exceeds 100 messages or the oldest message age exceeds 12 hours. Failed messages are replayed via `php spark stardust:dlq:replay`, which re-submits using the original `entry_id` partition key to preserve causal ordering.
+A holding queue for migration event payloads that failed processing by the dual-write consumer worker. Monitored with alerting thresholds: critical alerts fire if DLQ depth exceeds 100 messages or the oldest message age exceeds 12 hours. Failed messages are replayed via `bin/stardust dlq:replay`, which re-submits using the original `entry_id` partition key to preserve causal ordering.
 
 **See also:** Dual-Write, Backfill Pump.
 
@@ -77,7 +77,7 @@ A state indicator signaling that an entry's indexed representation in one or mor
 
 ### Driver/Adapter Pattern
 
-The extensibility architecture allowing StarDust's read path to be backed by different search engines without altering the ingestion or API layers. The default implementation is the MySQL Native Driver. Alternative drivers (e.g., a Meilisearch driver) can be injected via CI4 service configuration. All drivers implement the `EntrySearchInterface` contract and are strictly read-only — writes always target MySQL.
+The extensibility architecture allowing StarDust's read path to be backed by different search engines without altering the ingestion or API layers. The default implementation is the MySQL Native Driver. Alternative drivers (e.g., a Meilisearch driver) can be injected via the engine's Config object at construction time ([ADR 0026](adrs/0026-framework-neutral-composer-packaging.md)). All drivers implement the `EntrySearchInterface` contract and are strictly read-only — writes always target MySQL.
 
 **See also:** `EntrySearchInterface`, MySQL Native Driver, Consistency Header.
 
@@ -270,7 +270,7 @@ The physical MySQL table name for the Chronicler's async export job queue (see [
 
 ### `stardust_reconciler_dlq`
 
-The physical MySQL table name for the Reconciler's per-row poison-pill quarantine (see [`schemas/schema_reference.md`](schemas/schema_reference.md) §5.3). One row per quarantined entry, distinguished by a `source` discriminator (`sync_queue` or `bulk_import`) so the two Reconciler workloads share one operator surface. Replay is operator-initiated only (`php spark stardust:reconciler:dlq:replay`); there is no automatic retry and no automatic TTL. Fully specified by [ADR 0018](adrs/0018-reconciler-poison-pill-semantics.md). Distinct from the migration **Dead Letter Queue (DLQ)** above, which holds dual-write replication failures rather than indexed-materialization failures.
+The physical MySQL table name for the Reconciler's per-row poison-pill quarantine (see [`schemas/schema_reference.md`](schemas/schema_reference.md) §5.3). One row per quarantined entry, distinguished by a `source` discriminator (`sync_queue` or `bulk_import`) so the two Reconciler workloads share one operator surface. Replay is operator-initiated only (`bin/stardust reconciler:dlq:replay`); there is no automatic retry and no automatic TTL. Fully specified by [ADR 0018](adrs/0018-reconciler-poison-pill-semantics.md). Distinct from the migration **Dead Letter Queue (DLQ)** above, which holds dual-write replication failures rather than indexed-materialization failures.
 
 **See also:** The Reconciler, Dead Letter Queue, [ADR 0018](adrs/0018-reconciler-poison-pill-semantics.md).
 
@@ -326,7 +326,7 @@ An independent background PHP daemon responsible exclusively for sweeping dead o
 
 ### The Reconciler
 
-An independent, multi-worker background PHP CLI daemon (`php spark stardust:reconciler`) responsible for draining the `stardust_sync_queue` and backfilling entries into extension tables. It claims queue rows via `SELECT ... FOR UPDATE SKIP LOCKED` (enabling horizontal scaling), reads the authoritative `entry_data.fields` payload at upsert time (never a stale snapshot), and writes using `INSERT ... ON DUPLICATE KEY UPDATE`. Processes in configurable chunks with inter-chunk delay to prevent write spikes during recovery.
+An independent, multi-worker background PHP CLI daemon (`bin/stardust reconciler`) responsible for draining the `stardust_sync_queue` and backfilling entries into extension tables. It claims queue rows via `SELECT ... FOR UPDATE SKIP LOCKED` (enabling horizontal scaling), reads the authoritative `entry_data.fields` payload at upsert time (never a stale snapshot), and writes using `INSERT ... ON DUPLICATE KEY UPDATE`. Processes in configurable chunks with inter-chunk delay to prevent write spikes during recovery.
 
 **See also:** The Watcher, Exhaustion Fallback, `stardust_sync_queue`.
 
@@ -334,7 +334,7 @@ An independent, multi-worker background PHP CLI daemon (`php spark stardust:reco
 
 ### The Watcher
 
-A singleton background PHP CLI daemon (`php spark stardust:watcher`) responsible for monitoring global slot consumption across all extension tables and provisioning new pages when available capacity drops below the configured threshold (default: 20%). It employs advisory locking, empty-table-only DDL, and atomic registry updates to prevent metadata lock contention. The Watcher's registry update is the sole signal consumed by the Reconciler — no direct notification channel exists.
+A singleton background PHP CLI daemon (`bin/stardust watcher`) responsible for monitoring global slot consumption across all extension tables and provisioning new pages when available capacity drops below the configured threshold (default: 20%). It employs advisory locking, empty-table-only DDL, and atomic registry updates to prevent metadata lock contention. The Watcher's registry update is the sole signal consumed by the Reconciler — no direct notification channel exists.
 
 **See also:** The Reconciler, Page, Advisory Lock, Schema Registry.
 

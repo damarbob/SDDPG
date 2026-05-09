@@ -12,7 +12,7 @@ The Watcher and Reconciler each have such a blueprint ([`watcher_reconciler_daem
 
 ## 2. Scope
 
-- **The Liberator**: A singleton PHP CLI daemon (`php spark stardust:liberator`) that:
+- **The Liberator**: A singleton PHP CLI daemon (`bin/stardust liberator`) that:
   - Polls `stardust_slot_assignments` for rows in `status = 'tombstoned'`.
   - Sweeps each tombstoned slot via chunked `UPDATE entry_slots_page_X SET <slot_column> = NULL WHERE tenant_id = ? AND id > ? LIMIT 500`.
   - Commits `sweep_cursor_id` advancement in the **same transaction** as the chunk's `UPDATE` (per [ADR 0009](../adrs/0009-tombstone-based-slot-eviction.md)).

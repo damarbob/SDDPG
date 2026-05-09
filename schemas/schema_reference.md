@@ -372,14 +372,14 @@ Per-row quarantine for poison pills the Reconciler cannot process — malformed 
 > ADR [`0018`](../adrs/0018-reconciler-poison-pill-semantics.md) originally directed §3 placement (alongside `stardust_sync_queue`). The table was relocated to §5.3 as part of the operational consolidation post-StarDust/StarGate split (2026-05-03). The ADR is unchanged per the project's append-only ADR convention; this NOTE reconciles the cross-reference.
 
 > [!WARNING]
-> No automatic TTL. Quarantined rows persist until an operator runs `php spark stardust:reconciler:dlq:replay` (or explicitly deletes). Time-based purging would re-create the silent-data-loss failure mode ADR [`0018`](../adrs/0018-reconciler-poison-pill-semantics.md) rejects.
+> No automatic TTL. Quarantined rows persist until an operator runs `bin/stardust reconciler:dlq:replay` (or explicitly deletes). Time-based purging would re-create the silent-data-loss failure mode ADR [`0018`](../adrs/0018-reconciler-poison-pill-semantics.md) rejects.
 
 > [!NOTE]
 > Operator alert thresholds are non-negotiable: depth `> 100` and oldest-row age `> 12h`. Both thresholds are deployment-tunable; the **existence** of monitoring on both is not.
 
 ### 5.4 `backfill_checkpoints` (Backfill Pump Cursor State)
 
-Persistent cursor state for the **Backfill Pump** CLI (`php spark stardust:backfill`), enabling resumability across restarts via a per-job `last_processed_id` cursor over historical `entry_data`. One row per named backfill job; multiple concurrent jobs (e.g., per model or per legacy migration cohort) are supported by `job_name`. The CLI's `--from-id` flag overrides `last_processed_id` for manual resumption from a specific cursor; without the flag, the CLI resumes from the persisted value.
+Persistent cursor state for the **Backfill Pump** CLI (`bin/stardust backfill`), enabling resumability across restarts via a per-job `last_processed_id` cursor over historical `entry_data`. One row per named backfill job; multiple concurrent jobs (e.g., per model or per legacy migration cohort) are supported by `job_name`. The CLI's `--from-id` flag overrides `last_processed_id` for manual resumption from a specific cursor; without the flag, the CLI resumes from the persisted value.
 
 | Column              | Type                                            | Description                                                                                                                                                                                        |
 | :------------------ | :---------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

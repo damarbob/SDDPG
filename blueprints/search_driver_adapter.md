@@ -14,7 +14,7 @@ The architecture already names an `EntrySearchInterface` and a "Driver/Adapter" 
 
 - A formal **`EntrySearchInterface`** PHP interface defining the search contract (query input, paginated output, capability declaration).
 - A **`MysqlNativeDriver`** implementing that interface (extracting the current inline read-path logic into a discrete, testable class).
-- A **driver registration / resolution** mechanism at the CI4 service layer, allowing configuration-based driver injection.
+- A **driver registration / resolution** mechanism exposed by the engine's Config object, allowing configuration-based driver injection ([ADR 0026](../adrs/0026-framework-neutral-composer-packaging.md)).
 - **Consistency model introspection** — a `consistencyModel()` method on the interface that returns the active driver's consistency model (`strong` or `eventual`). Callers translate this return value to their own transport contract (e.g., an HTTP header) as needed.
 
 ## 3. Non-Goals
@@ -27,7 +27,7 @@ The architecture already names an `EntrySearchInterface` and a "Driver/Adapter" 
 
 1. `EntrySearchInterface` is a PHP interface with clearly documented method signatures covering: filtered listing (with cursor pagination), single-entry retrieval, and capability introspection (e.g., `supportsFuzzySearch(): bool`).
 2. The existing MySQL read path is encapsulated in `MysqlNativeDriver` implementing `EntrySearchInterface` with zero behavioral changes.
-3. A non-MySQL stub driver can be injected via CI4 service configuration and successfully resolves search queries (returning canned data is acceptable for validation).
+3. A non-MySQL stub driver can be injected via the engine's Config object and successfully resolves search queries (returning canned data is acceptable for validation).
 4. The driver exposes its consistency model via `consistencyModel(): string` returning `"strong"` or `"eventual"`. Callers surface this value through their own transport layer (e.g., an HTTP header).
 5. If a caller requests a capability the active driver does not support (e.g., fuzzy search on the native driver), the function API throws a typed exception with a `capability_unsupported` discriminator identifying the unsupported capability.
 
@@ -69,14 +69,14 @@ classDiagram
 
 - The interface is **read-only**. Writes always go through the MySQL ingestion path. A search driver that maintains its own index is responsible for consuming database events or sync-queue entries independently.
 - `capabilities()` enables graceful capability negotiation rather than runtime `try/catch` against unsupported operations.
-- Driver resolution is a CI4 service binding — no factory registry or plugin loader complexity at this stage.
+- Driver resolution is a Config-object field passed at engine construction — no factory registry, framework service binding, or plugin loader complexity at this stage ([ADR 0026](../adrs/0026-framework-neutral-composer-packaging.md)).
 
 ## 6. Resolved Decisions
 
 1. **Query translation boundary** — resolved by [ADR 0021](../adrs/0021-search-driver-query-representation.md). `EntrySearchInterface` accepts a StarDust-native `QueryFilter` value object; raw DSL passthrough is rejected. The closed leaf-operator set (`eq`, `neq`, `lt`/`lte`/`gt`/`gte`, `in`/`nin`, `prefix`, `between`, `is_null`/`is_not_null`) plus composite nodes (`and`, `or`, `not`) bound what consumers can express in v1.
 2. **Capability granularity & `is_filterable` jurisdiction** — resolved by [ADR 0022](../adrs/0022-search-driver-capability-jurisdiction.md). Drivers expose a closed capability surface: `supportedOperators()`, `supportsFilterOn(field_id)`, `supportsFuzzySearch()`, `consistencyModel()`. The `is_filterable` registry flag retains MySQL-driver jurisdiction; non-MySQL drivers answer filter-acceptance via `supportsFilterOn`. Pre-flight rejects on either an unsupported operator or `supportsFilterOn(field_id) === false`.
 3. **Consumer-facing wire format** — resolved by [blueprints/queryfilter_wire_format.md](queryfilter_wire_format.md). The JSON encoding consumers POST is now normative: tagged `"op"` discriminator, explicit `{"model","name"}` field reference, per-operator `value` shapes, typed-value rules, bounds, and a closed error discriminator set. A normative JSON Schema artifact ships at `schemas/queryfilter.schema.json`.
-4. **Multi-driver composition** — out of scope for v1. One active driver per deployment, selected via CI4 service binding. A hybrid-driver routing mode would be a separate ADR if a use case emerges.
+4. **Multi-driver composition** — out of scope for v1. One active driver per deployment, selected via the engine's Config object ([ADR 0026](../adrs/0026-framework-neutral-composer-packaging.md)). A hybrid-driver routing mode would be a separate ADR if a use case emerges.
 
 ## 7. Related Documents
 

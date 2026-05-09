@@ -10,12 +10,12 @@ The Architecture Blueprint (§2.1) describes two independent background daemons 
 
 ## 2. Scope
 
-- **The Watcher**: A singleton PHP CLI daemon (`php spark stardust:watcher`) that:
+- **The Watcher**: A singleton PHP CLI daemon (`bin/stardust watcher`) that:
   - Polls global slot consumption across all `entry_slots_page_X` tables on a configurable interval.
   - Provisions a new extension page when available capacity drops below the configured threshold (default: 20%).
   - Uses advisory locking (`GET_LOCK`) and empty-table-only DDL to avoid metadata lock contention.
   - Atomically updates the schema registry on successful provisioning.
-- **The Reconciler**: A multi-worker PHP CLI daemon (`php spark stardust:reconciler`) that:
+- **The Reconciler**: A multi-worker PHP CLI daemon (`bin/stardust reconciler`) that:
   - Continuously polls `stardust_sync_queue` using `SELECT ... FOR UPDATE SKIP LOCKED`.
   - Backfills entries into extension tables using `INSERT ... ON DUPLICATE KEY UPDATE`.
   - Processes in configurable chunks with configurable inter-chunk delay.
