@@ -23,6 +23,7 @@ SDDPG serves as the canonical reference for architectural decisions, migration s
 | [`adrs/`](adrs/)                                                                 | Architecture Decision Records — immutable log of _why_ key technical decisions were made. Prevents re-litigating settled debates.                          |
 | [`blueprints/queryfilter_wire_format.md`](blueprints/queryfilter_wire_format.md) | QueryFilter Wire Format — normative JSON encoding for consumer filter payloads: envelope, node shapes, typed values, error model, and JSON Schema sidecar. |
 | [`schemas/queryfilter.schema.json`](schemas/queryfilter.schema.json)             | JSON Schema (Draft 2020-12) for the v1 QueryFilter wire format. Normative artifact for consumer-side and CI validation.                                    |
+| [`implementation_phases.md`](implementation_phases.md)                           | Build sequencer — nine dependency-ordered phases with exit criteria, ADR coverage index, and document precedence rules.                                    |
 
 ## Planned Contents
 
@@ -56,3 +57,4 @@ SDDPG/
 - **Immutability**: ADRs are append-only. To supersede a decision, create a new ADR referencing the old one — never edit the original.
 - **Architecture Blueprint is the sole source of truth**: `architecture_blueprint.md` MUST NOT reference any other document in this repository. It is self-contained by design.
 - **ADR reference direction**: only newer ADRs may reference older ADRs — never the reverse. This keeps the ADR dependency graph a strict DAG and prevents circular reasoning.
+- **Document precedence on conflict**: the full resolution order (blueprint → ADRs → component blueprints → schema reference) is defined in [`implementation_phases.md`](implementation_phases.md#document-precedence).
