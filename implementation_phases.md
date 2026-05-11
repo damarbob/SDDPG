@@ -181,6 +181,7 @@ Full column definitions, index specifications, and atomicity invariants for all 
 - **Slot extraction engine:** for each `assigned`, `backfilling`, or `ready` slot on a live field, extracts the field's value from `fields` and writes it to the reserved slot column on `entry_slots_page_X` in the same transaction. (New writes during an active retype must land in the `backfilling` slot so that promotion to `ready` yields complete data.)
 - **Atomic transaction boundary:** `entry_data` insert + all `entry_slots_page_X` writes commit together; a partial write must not be visible.
 - **Chunked bulk ingestion:** accepts a batch of entry payloads; processes in configurable chunks with a configurable inter-chunk delay to limit write spikes.
+- **Async bulk-ingest submission:** for payloads that exceed the synchronous size threshold, the write path accepts an async submission, persists a job record, and returns an Import Job ID to the caller; the actual processing is handled by the Reconciler. Payloads at or below the threshold are processed inline per the chunked path above. Full contract — size threshold, idempotency-key semantics, per-chunk result manifest — is in [ADR 0011](adrs/0011-chunked-bulk-ingestion.md).
 - **Exhaustion fallback:** when no free/assigned slots of the required type exist, the engine writes `entry_data.fields`, skips the slot write, and enqueues the `entry_id` into `stardust_sync_queue` — all in one transaction. The caller receives no error.
 
 **References:**
@@ -253,9 +254,11 @@ Full column definitions, index specifications, and atomicity invariants for all 
 **Deliverables:**
 
 - **Watcher (singleton):** lazy polling loop (default 60 s); acquires `GET_LOCK('stardust_page_provision', 10)` before any DDL; provisions a new page when available capacity drops below 20%; emits structured-log events per ADR 0020; enforced singleton via PID file or OS-level process lock.
+- **Cardinality advisory (periodic):** on a 24-hour cadence, the Watcher samples index cardinality for each active slot and emits `cardinality_sampled` structured-log events; emits `low_cardinality_index` when a slot's cardinality falls below the policy threshold. See [ADR 0019](adrs/0019-index-cardinality-policy.md).
 - **Reconciler (multi-worker):** polls `stardust_sync_queue` via `SELECT … FOR UPDATE SKIP LOCKED`; on each cycle queries the registry for available capacity; if capacity exists, backfills entries using `INSERT … ON DUPLICATE KEY UPDATE` and deletes the processed queue rows; processes in configurable chunks (default 500) with configurable inter-chunk delay; reports throughput to stdout.
 - **DLQ semantics:** entries the Reconciler cannot process (malformed JSON, missing `entry_data` row, schema incompatibility) are quarantined in `stardust_reconciler_dlq`; no automatic retry; operator-initiated replay only.
-- **Structured-log events:** all daemon lifecycle events emit structured log events with `chunk_correlation_id`. The closed event-name vocabulary for the Watcher (`poll_started`, `poll_complete`, `provision_started`, `provision_complete`, `provision_failed`, `lock_contention`) is declared in [ADR 0020](adrs/0020-structured-logging-mandate.md); the closed vocabulary for the Reconciler (`chunk_claimed`, `chunk_complete`, `chunk_partial`, `dlq_inserted`, `cache_miss`, `capacity_wait`, `coercion_null`) is declared in [watcher_reconciler_daemons.md §7](blueprints/watcher_reconciler_daemons.md). No event names outside these lists are permitted.
+- **`reconciler:dlq:replay` operator command** (`bin/stardust reconciler:dlq:replay`): re-inserts the target DLQ row's `entry_id` into `stardust_sync_queue`, increments `retry_count`, and deletes the DLQ row in one transaction. This is the sole recovery path for quarantined entries. See [ADR 0018](adrs/0018-reconciler-poison-pill-semantics.md).
+- **Structured-log events:** all daemon lifecycle events emit structured log events with `chunk_correlation_id`. The closed event-name vocabulary for the Watcher (`poll_started`, `poll_complete`, `provision_started`, `provision_complete`, `provision_failed`, `lock_contention`) is declared in [ADR 0020](adrs/0020-structured-logging-mandate.md); the closed vocabulary for the Reconciler (`chunk_claimed`, `chunk_complete`, `chunk_partial`, `dlq_inserted`, `cache_miss`, `capacity_wait`, `coercion_null`) is declared in [ADR 0020](adrs/0020-structured-logging-mandate.md) (sub-field payload details in [watcher_reconciler_daemons.md §7](blueprints/watcher_reconciler_daemons.md)). No event names outside these lists are permitted.
 
 **References:**
 
@@ -263,6 +266,7 @@ Full column definitions, index specifications, and atomicity invariants for all 
 | :--- | :--- |
 | [ADR 0008](adrs/0008-singleton-watcher-multi-worker-reconciler.md) | Singleton Watcher + multi-worker Reconciler concurrency model |
 | [ADR 0018](adrs/0018-reconciler-poison-pill-semantics.md) | Reconciler poison-pill / DLQ semantics |
+| [ADR 0019](adrs/0019-index-cardinality-policy.md) | Index cardinality policy; periodic cardinality advisory |
 | [ADR 0020](adrs/0020-structured-logging-mandate.md) | Structured logging mandate |
 | [Blueprint: Watcher + Reconciler](blueprints/watcher_reconciler_daemons.md) | Feature spec and acceptance criteria |
 
@@ -307,22 +311,24 @@ Full column definitions, index specifications, and atomicity invariants for all 
 
 ---
 
-## Phase 6b — Field Retype Pipeline
+## Phase 6b — Field Retype & Filterability-Promotion Pipeline
 
-**Goal:** A field's declared type can be safely changed with read availability maintained throughout the transition.
+**Goal:** A field's declared type can be safely changed, and a non-filterable field can be promoted to filterable — both with read availability maintained throughout the transition.
 
 **Depends on:** Phase 6a. The retype lifecycle produces `tombstoned` slots that the Liberator reclaims; building the consumer first means 6b lands with a working sink for the tombstones it generates.
 
 **Deliverables:**
 
-- **Field retype pipeline:** implements the `retype → tombstone → assign → backfill → promote` lifecycle per [Architecture Blueprint §2.1.6](architecture_blueprint.md): atomic registry transaction that updates `declared_type`, tombstones the old slot, and (if a free slot of the target type exists) transitions the new slot `free → backfilling`; Reconciler-driven backfill via a direct cursor scan over `entry_data` for the `(tenant_id, model_id)` partition, applying `JSON_EXTRACT` + type coercion per [ADR 0024](adrs/0024-type-coercion-matrix-for-retype-backfill.md), with progress tracked in a `backfill_checkpoints` row keyed `retype_field_{field_id}` (see [schema_reference.md §5.4](schemas/schema_reference.md)); slot advances `backfilling → ready` once all rows in the partition are processed.
-- **Type coercion matrix:** applied during Reconciler backfill; values that cannot be coerced store `NULL` in the new slot and emit a `coercion_null` structured-log event. Categorical rejections (numeric ↔ datetime) are enforced at registry-write time.
+- **Field retype & filterability-promotion pipeline:** implements the `retype → tombstone → assign → backfill → promote` lifecycle per [Architecture Blueprint §2.1.6](architecture_blueprint.md) and [ADR 0016](adrs/0016-field-type-change-lifecycle.md) for two triggers: (1) a `declared_type` change, and (2) an `is_filterable: false → true` promotion on a field that already has data on an unindexed slot. Both triggers use the same atomic registry transaction (tombstone old slot, transition new slot `free → backfilling`) and the same Reconciler-driven backfill (cursor scan over `entry_data` for the `(tenant_id, model_id)` partition, progress tracked in a `backfill_checkpoints` row keyed `retype_field_{field_id}`; see [schema_reference.md §5.4](schemas/schema_reference.md)); slot advances `backfilling → ready` once all rows in the partition are processed.
+- **Type coercion matrix:** applied during Reconciler backfill for type-change retypes; values that cannot be coerced store `NULL` in the new slot and emit a `coercion_null` structured-log event. Categorical rejections (numeric ↔ datetime) are enforced at registry-write time. No coercion applies to filterability-promotion (the value is already the correct type). See [ADR 0024](adrs/0024-type-coercion-matrix-for-retype-backfill.md).
+- **Cardinality post-backfill sample:** after any slot advances to `ready`, trigger the one-shot cardinality sample per [ADR 0019](adrs/0019-index-cardinality-policy.md), emitting a `cardinality_sampled` structured-log event.
 
 **References:**
 
 | ADR | Decision |
 | :--- | :--- |
-| [ADR 0016](adrs/0016-field-type-change-lifecycle.md) | Field type change lifecycle |
+| [ADR 0016](adrs/0016-field-type-change-lifecycle.md) | Field type change lifecycle (both triggers: type-change and filterability-promotion) |
+| [ADR 0019](adrs/0019-index-cardinality-policy.md) | Index cardinality policy; post-backfill cardinality sample |
 | [ADR 0024](adrs/0024-type-coercion-matrix-for-retype-backfill.md) | Normative type coercion matrix |
 | [Architecture Blueprint §2.1.6](architecture_blueprint.md) | Field type change lifecycle |
 
@@ -334,6 +340,7 @@ Full column definitions, index specifications, and atomicity invariants for all 
 - [ ] Once the Reconciler completes backfill for all rows in the partition, the slot advances to `ready`; if `is_filterable = true`, filter queries against the field succeed using the new slot's index.
 - [ ] Killing the Reconciler mid-retype-backfill and restarting it causes it to resume from `last_processed_id + 1` in `backfill_checkpoints`; no entry's new slot receives a double-write and no entry is left unprocessed after the run completes.
 - [ ] The atomic retype registry transaction (declared_type update + old-slot tombstone + new-slot `free → backfilling`) also increments `stardust_schema_version.version` in the same transaction as the three registry writes.
+- [ ] Promoting a field from `is_filterable = false` to `is_filterable = true` on a field that already has data on its current unindexed slot triggers the full pipeline: the existing slot is tombstoned, a new indexed slot is provisioned `free → backfilling`, the Reconciler backfills all existing entries into the new slot, and once the slot advances to `ready` the `(tenant_id, slot_column)` composite index is used for filter queries against that field.
 
 ---
 
@@ -356,7 +363,7 @@ Full column definitions, index specifications, and atomicity invariants for all 
 
 | ADR | Decision |
 | :--- | :--- |
-| [ADR 0010](adrs/0010-asynchronous-exports.md) | Asynchronous exports, per-tenant fairness, artifact TTL and cap |
+| [ADR 0010](adrs/0010-asynchronous-exports.md) | Asynchronous exports (relocation notice — normative content is in [Blueprint: Chronicler Daemon](blueprints/chronicler_daemon.md)) |
 | [ADR 0025](adrs/0025-chronicler-failure-semantics.md) | Chronicler failure semantics, backoff, lease, worker identity |
 | [Blueprint: Async Exports](blueprints/async_exports.md) | Feature spec and acceptance criteria |
 | [Blueprint: Chronicler Daemon](blueprints/chronicler_daemon.md) | Daemon design, claim protocol, GC, per-tenant round-robin |
@@ -439,7 +446,7 @@ Every accepted ADR is referenced by at least one phase above.
 | [0016](adrs/0016-field-type-change-lifecycle.md) — Field Type Change Lifecycle | 6b |
 | [0017](adrs/0017-schema-registry-as-coordination-contract.md) — Schema Registry as Coordination Contract | 1 |
 | [0018](adrs/0018-reconciler-poison-pill-semantics.md) — Reconciler Poison-Pill Semantics | 5 |
-| [0019](adrs/0019-index-cardinality-policy.md) — Index Cardinality Policy | 2 |
+| [0019](adrs/0019-index-cardinality-policy.md) — Index Cardinality Policy | 2, 5, 6b |
 | [0020](adrs/0020-structured-logging-mandate.md) — Structured Logging Mandate | 0 (cross-phase), 5 |
 | [0021](adrs/0021-search-driver-query-representation.md) — Search Driver Query Representation | 8 |
 | [0022](adrs/0022-search-driver-capability-jurisdiction.md) — Search Driver Capability Jurisdiction | 8 |
