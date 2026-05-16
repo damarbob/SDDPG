@@ -14,6 +14,8 @@ This document defines the core architecture for StarDust, which utilizes a **Ver
 
 StarDust targets MySQL 8.0.13 or newer (Percona Server 8.0.13+ is supported on the same basis). Older MySQL versions and MariaDB are explicitly out of scope: the schema registry's atomicity invariants rely on partial unique indexes, the registry diagnostic queries rely on common table expressions, and the operator runbooks for cardinality advisories rely on `EXPLAIN ANALYZE` — all of which require the 8.0.13 floor. Implementations may not target older versions; no compatibility shim or generated-column workaround is supported.
 
+StarDust is a daemonized engine: ingestion and synchronous reads are served by the function API in-process, while four independent background processes — the Watcher, Reconciler, Liberator, and Chronicler (see §2.1) — handle capacity provisioning, queue draining, slot eviction, and asynchronous exports. These processes are designed to run continuously as supervised long-running processes (e.g., under systemd, supervisor, or a container orchestrator); they are not invoked discretely per request or per scheduled tick. Consequently, a supported deployment target MUST provide the ability to run persistent background processes or long-running containers, PHP 8.x with CLI access for the engine's command entry point, and local filesystem write access for export artifacts. Hosting environments that disallow long-running processes — typically free or restricted shared hosting — are out of scope.
+
 ### 1.2 Multi-Tenancy Boundary
 
 StarDust enforces **tenant isolation** — it does not perform tenant resolution or tenant management. These two halves of multi-tenancy are owned at different layers:

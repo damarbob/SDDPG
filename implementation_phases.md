@@ -89,6 +89,7 @@ Two constraints apply to every phase and must not regress once established:
 | [ADR 0020](adrs/0020-structured-logging-mandate.md) | Structured logging mandate |
 | [ADR 0023](adrs/0023-minimum-mysql-version.md) | MySQL 8.0.13+ floor |
 | [ADR 0026](adrs/0026-framework-neutral-composer-packaging.md) | Framework-neutral Composer packaging |
+| [ADR 0027](adrs/0027-persistent-process-daemon-execution-model.md) | Persistent-process daemon execution model; host capability requirements |
 
 **Exit criteria:**
 
@@ -268,6 +269,7 @@ Full column definitions, index specifications, and atomicity invariants for all 
 | [ADR 0018](adrs/0018-reconciler-poison-pill-semantics.md) | Reconciler poison-pill / DLQ semantics |
 | [ADR 0019](adrs/0019-index-cardinality-policy.md) | Index cardinality policy; periodic cardinality advisory |
 | [ADR 0020](adrs/0020-structured-logging-mandate.md) | Structured logging mandate |
+| [ADR 0027](adrs/0027-persistent-process-daemon-execution-model.md) | Persistent-process execution model; Watcher singleton enforcement |
 | [Blueprint: Watcher + Reconciler](blueprints/watcher_reconciler_daemons.md) | Feature spec and acceptance criteria |
 
 **Exit criteria:**
@@ -297,6 +299,7 @@ Full column definitions, index specifications, and atomicity invariants for all 
 | ADR | Decision |
 | :--- | :--- |
 | [ADR 0009](adrs/0009-tombstone-based-slot-eviction.md) | Tombstone-based slot eviction strategy |
+| [ADR 0027](adrs/0027-persistent-process-daemon-execution-model.md) | Persistent-process execution model; Liberator singleton enforcement |
 | [Blueprint: Liberator](blueprints/liberator_daemon.md) | Liberator feature spec and acceptance criteria |
 | [Architecture Blueprint §2.1.3](architecture_blueprint.md) | Liberator sweep mechanics |
 
@@ -365,6 +368,7 @@ Full column definitions, index specifications, and atomicity invariants for all 
 | :--- | :--- |
 | [ADR 0010](adrs/0010-asynchronous-exports.md) | Asynchronous exports (relocation notice — normative content is in [Blueprint: Chronicler Daemon](blueprints/chronicler_daemon.md)) |
 | [ADR 0025](adrs/0025-chronicler-failure-semantics.md) | Chronicler failure semantics, backoff, lease, worker identity |
+| [ADR 0027](adrs/0027-persistent-process-daemon-execution-model.md) | Persistent-process execution model; artifact filesystem requirement |
 | [Blueprint: Async Exports](blueprints/async_exports.md) | Feature spec and acceptance criteria |
 | [Blueprint: Chronicler Daemon](blueprints/chronicler_daemon.md) | Daemon design, claim protocol, GC, per-tenant round-robin |
 
@@ -454,3 +458,4 @@ Every accepted ADR is referenced by at least one phase above.
 | [0024](adrs/0024-type-coercion-matrix-for-retype-backfill.md) — Type Coercion Matrix for Retype Backfill | 6b |
 | [0025](adrs/0025-chronicler-failure-semantics.md) — Chronicler Failure Semantics | 7 |
 | [0026](adrs/0026-framework-neutral-composer-packaging.md) — Framework-Neutral Composer Packaging | 0 (cross-phase), 8 |
+| [0027](adrs/0027-persistent-process-daemon-execution-model.md) — Persistent-Process Daemon Execution Model | 0, 5, 6a, 7 |

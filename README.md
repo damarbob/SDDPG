@@ -49,6 +49,19 @@ SDDPG/
 └── onboarding.md            # New developer guide
 ```
 
+## Deployment Requirements
+
+StarDust requires a deployment target that supports persistent background processes — the engine ships four supervised daemons (Watcher, Reconciler, Liberator, Chronicler) that are expected to run continuously, not as cron-triggered one-shots. The supported targets are VPS deployments (systemd / supervisor / equivalent) and containerized deployments (Docker, Kubernetes, etc.). Free shared hosting that disallows long-running processes is structurally unsupported.
+
+A supported host MUST provide:
+
+- The ability to run persistent background processes or long-running containers.
+- MySQL 8.0.13+ or Percona Server 8.0.13+.
+- PHP 8.x with CLI access (required by the `bin/stardust` entry point).
+- Local filesystem write access for export artifacts (a mounted volume in container deployments).
+
+See [`adrs/0027-persistent-process-daemon-execution-model.md`](adrs/0027-persistent-process-daemon-execution-model.md) for the full rationale, the deployment tier matrix, and the status of cron-driven execution (deferred, not foreclosed).
+
 ## Conventions
 
 - **File format**: Markdown (`.md`). Use Mermaid fenced blocks for diagrams where possible.
