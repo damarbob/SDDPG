@@ -41,9 +41,9 @@ FROM <entry_slots_page_X>
 WHERE tenant_id = <tenant_id>;
 ```
 
-The query is bounded by the per-tenant partition (the same tenant scoping as the read path) and uses the slot's existing covering index. On large pages, the query is allowed to use `EXPLAIN ANALYZE` for `distinct_values` estimation rather than an exact count — exact precision is not required; order-of-magnitude is.
+The query is bounded by the per-tenant partition (the same tenant scoping as the read path) and uses the slot's existing covering index. On large pages, operators running MySQL 8.0.18+ may substitute `EXPLAIN ANALYZE` for `distinct_values` estimation rather than an exact `COUNT(DISTINCT)` — exact precision is not required; order-of-magnitude is. On 8.0.13–8.0.17 the exact `COUNT(DISTINCT)` is the only path, since `EXPLAIN ANALYZE` did not land until 8.0.18.
 
-`MySQL 8.0.13` (per ADR `0023`) is the floor for this pipeline because `EXPLAIN ANALYZE` and the registry's other supporting features rely on it. No older-version fallback is supported.
+`MySQL 8.0.13` (per ADR `0023`) is the floor for this pipeline because partial unique indexes and the registry's other supporting features rely on it. The pipeline's default `COUNT(DISTINCT)` query runs on every supported version; `EXPLAIN ANALYZE` is a per-deployment optimization, not a requirement. No older-version fallback is supported.
 
 ### Threshold and Event Emission
 

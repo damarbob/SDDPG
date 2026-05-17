@@ -76,7 +76,7 @@ Two constraints apply to every phase and must not regress once established:
 
 **Deliverables:**
 
-- MySQL 8.0.13+ (or Percona 8.0.13+) environment with partial unique indexes, CTEs, and `EXPLAIN ANALYZE` confirmed available.
+- MySQL 8.0.13+ (or Percona 8.0.13+) environment with partial unique indexes and CTEs confirmed available. (`EXPLAIN ANALYZE` is an 8.0.18+ operator-runbook tool per ADR `0019`/`0023`; the engine does not depend on it and Phase 0 does not smoke-test for it.)
 - Composer package skeleton: namespace, autoloader, entry-point class, no third-party `require` entries in `composer.json`.
 - Structured logging shim wired at construction time (PSR-3 or equivalent injected via Config; no hard dependency on any logging library).
 - CI pipeline that runs the smoke tests below against a real MySQL 8.0.13+ instance (no mocks).
@@ -94,7 +94,6 @@ Two constraints apply to every phase and must not regress once established:
 **Exit criteria:**
 
 - [ ] `composer install` completes against a fresh checkout with no warnings about missing extensions or unresolved dependencies.
-- [ ] A smoke-test query confirms `EXPLAIN ANALYZE` is available (`ERROR 1064` must not appear).
 - [ ] A smoke-test query confirms partial unique indexes are supported: `CREATE UNIQUE INDEX … WHERE …` succeeds.
 - [ ] A smoke-test query confirms CTEs are available: `WITH cte AS (SELECT 1) SELECT * FROM cte` succeeds.
 - [ ] MariaDB rejection: the same smoke suite exits non-zero when pointed at a MariaDB instance.

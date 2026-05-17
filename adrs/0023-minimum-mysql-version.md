@@ -24,9 +24,10 @@ The generated-column workaround documented in [`schemas/schema_reference.md`](..
 - Functional / conditional unique indexes (the registry constraint).
 - `JSON_TABLE` (used in legacy-data-migration tooling — out of scope here, but the version requirement aligns).
 - `WITH ... AS (...)` common table expressions (used in registry diagnostic queries).
-- `EXPLAIN ANALYZE` (used in operator runbooks for the cardinality advisory introduced by ADR `0019`).
 
 Picking 8.0.13 captures the entire feature set the architecture already assumes without imposing a more recent floor than necessary.
+
+`EXPLAIN ANALYZE` (added in 8.0.18) is an operator-side optimization mentioned by ADR `0019` for cardinality estimation. It is **not** part of the engine's runtime surface — the cardinality pipeline's default sample uses `COUNT(*)` + `COUNT(DISTINCT)`, which works on 8.0.13. Operators on 8.0.18+ may substitute `EXPLAIN ANALYZE` for cheaper estimation; operators on 8.0.13–8.0.17 use the exact-count default. `EXPLAIN ANALYZE` availability is not part of the version-floor justification.
 
 ### Out-of-scope versions
 
@@ -51,7 +52,7 @@ Nothing. ADRs in the project are still in flux (this ADR, like all current ADRs,
 **Positive:**
 
 - The registry's atomicity invariants reduce to native MySQL constraints. Implementation reviewers can read the `stardust_slot_assignments` DDL once and trust the constraint, rather than verifying that every code path also maintains a generated-column shadow.
-- Operator runbooks can assume modern MySQL surface area: `JSON_TABLE`, CTEs, `EXPLAIN ANALYZE`, `SKIP LOCKED`. Diagnostic queries do not need legacy-version fallbacks.
+- Operator runbooks can assume modern MySQL surface area: `JSON_TABLE`, CTEs, `SKIP LOCKED`. Diagnostic queries do not need legacy-version fallbacks. (`EXPLAIN ANALYZE` is available only on 8.0.18+; runbooks that want it must check the deployed server version and fall back to `EXPLAIN FORMAT=JSON` on 8.0.13–8.0.17.)
 - The compatibility matrix is simple: "MySQL 8.0.13+ or Percona 8.0.13+." Documentation, support, and bug-triage are bounded.
 
 **Negative:**
