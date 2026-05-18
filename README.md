@@ -11,6 +11,70 @@ SDDPG serves as the canonical reference for architectural decisions, migration s
 - **Internal team members** — onboarding context and project history.
 - **Future contributors** — architectural rationale and operational playbooks.
 
+## Architecture Overview
+
+Two eagle-view diagrams to orient new readers. They intentionally omit internal details — see [`architecture_blueprint.md`](architecture_blueprint.md) for the normative specification.
+
+### StarDust internals (component view)
+
+The function API is the only entry point. Any PHP application can consume StarDust via Composer — StarGate is one such consumer, not a required one. The engine, registry, and daemons coordinate exclusively through the database; there is no message bus or direct IPC. The schema registry is the single coordination surface.
+
+```mermaid
+graph TB
+    Caller[Consumer<br/>e.g., StarGate · custom app · CLI]
+
+    subgraph StarDust["StarDust (Composer library)"]
+        API[Function API]
+        Engine[Write & Read Engine<br/>Payload Splitting · Two-Query Read Path]
+        Driver[Search Driver Interface<br/>MySQL Native default · pluggable]
+        Registry[(Schema Registry<br/>field ↔ slot mapping)]
+        Daemons[Background Daemons<br/>Watcher · Reconciler<br/>Liberator · Chronicler]
+        Export[/Export artifacts<br/>local filesystem/]
+    end
+
+    MySQL[(MySQL 8.0.13+<br/>entry_data · entry_slots_page_X<br/>stardust_sync_queue)]
+
+    Caller --> API
+    API --> Engine
+    Engine --> Driver
+    Engine <--> Registry
+    Daemons <--> Registry
+    Driver --> MySQL
+    Engine --> MySQL
+    Daemons --> MySQL
+    Daemons -.write.-> Export
+```
+
+### StarDust's position in the stack (context view)
+
+StarDust is the bottom-layer engine library. StarGate wraps it with HTTP, auth, and tenant resolution. StarSystem sits above them. Each upward arrow is a Composer dependency on the layer below.
+
+```mermaid
+graph TB
+    Browser[Browser / HTTP Client]
+
+    subgraph StarSystem["StarSystem"]
+        SS[ ]
+    end
+
+    subgraph StarGate["StarGate — HTTP / Auth layer"]
+        SG[HTTP endpoints · Wire format<br/>Auth · Tenant resolution & management]
+    end
+
+    subgraph StarDust["StarDust — Engine library"]
+        SD[Function API · Engine<br/>Schema Registry · Daemons<br/>Tenant isolation only]
+    end
+
+    MySQL[(MySQL 8.0.13+)]
+
+    Browser --> SS
+    SS -->|Composer| SG
+    SG -->|Composer| SD
+    SD --> MySQL
+
+    style SS fill:transparent,stroke-dasharray: 3 3
+```
+
 ## Current Contents
 
 | Document                                                                         | Description                                                                                                                                                |
