@@ -46,7 +46,7 @@ Each source declares a closed list of event names in its feature blueprint. Exam
 - `liberator`: `sweep_started`, `sweep_chunk`, `sweep_complete`, `deadlock_retry`, `sweep_gap_flagged`.
 - `chronicler`: `job_claimed`, `job_complete`, `job_failed`, `low_disk`, `artifact_oversized`, `gc_swept`.
 - `api`: `request`, `pre_flight_rejected`, `bulk_accepted`, `payload_too_large`.
-- `registry`: `version_bump`, `low_cardinality_index`, `cardinality_sampled`.
+- `registry`: `version_bump`, `low_cardinality_index`, `cardinality_sampled`, `page_provisioned`, `slot_reserved`.
 
 Adding a new event name requires a blueprint update. Free-form `printf`-style log lines are not permitted.
 
