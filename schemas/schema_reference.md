@@ -7,7 +7,7 @@ The schema comprises three concern groups:
 
 1. **Data plane** (§1–§3) — `entry_data`, `entry_slots_page_X`, `stardust_sync_queue`. Stores entry payloads and the indexed projections.
 2. **Schema Registry** (§4) — `stardust_models`, `stardust_fields`, `stardust_pages`, `stardust_slot_assignments`. The coordination contract between the write path, the read path, and the three daemons (ADR [`0017`](../adrs/0017-schema-registry-as-coordination-contract.md)).
-3. **Operational & Coordination** (§5) — `stardust_schema_version`, `stardust_export_jobs`, `stardust_reconciler_dlq`, `backfill_checkpoints`. Tables that exist for daemon coordination, async work, operator triage, and migration state.
+3. **Operational & Coordination** (§5) — `stardust_schema_version`, `stardust_export_jobs`, `stardust_reconciler_dlq`, `backfill_checkpoints`, `stardust_import_jobs`. Tables that exist for daemon coordination, async work, operator triage, and migration state.
 
 ## Entity-Relationship Diagram
 
@@ -112,6 +112,18 @@ erDiagram
         BIGINT last_processed_id
         ENUM status "running|paused|completed|failed"
         DATETIME updated_at
+    }
+
+    stardust_import_jobs {
+        BIGINT id PK
+        BIGINT tenant_id "Index (tenant_id, status)"
+        ENUM status "pending|processing|completed|failed"
+        VARCHAR idempotency_key "nullable; UNIQUE (tenant_id, idempotency_key)"
+        VARCHAR artifact_path "filesystem path to payload JSON"
+        INT entry_count
+        JSON manifest "nullable; per-chunk outcomes, populated by Reconciler"
+        DATETIME created_at
+        DATETIME completed_at "nullable"
     }
 ```
 
@@ -403,3 +415,34 @@ Persistent cursor state for the **Backfill Pump** CLI (`bin/stardust backfill`),
 
 > [!NOTE]
 > **Retype-backfill usage.** In addition to the Backfill Pump CLI, the **Reconciler daemon** uses `backfill_checkpoints` to track per-field retype-backfill progress. When the schema-registry retype transaction commits ([ADR 0016](../adrs/0016-field-type-change-lifecycle.md) step 1), the Reconciler inserts a `backfill_checkpoints` row with `job_name = 'retype_field_{field_id}'` and performs a direct cursor scan over `entry_data` for the `(tenant_id, model_id)` partition of the retyping field, applying `JSON_EXTRACT` + type coercion per [ADR 0024](../adrs/0024-type-coercion-matrix-for-retype-backfill.md). It does **not** use `stardust_sync_queue` for this workload — that queue is reserved for capacity-exhaustion fallbacks only. The `last_processed_id` cursor advances per chunk; on daemon restart the Reconciler resumes from `last_processed_id + 1` for any `status = 'running'` retype-backfill rows. All retype-backfill writes MUST be idempotent (`INSERT … ON DUPLICATE KEY UPDATE`).
+
+### 5.5 `stardust_import_jobs` (Async Bulk-Ingest Job Queue)
+
+The Reconciler daemon's claim-and-process queue for async bulk-ingest submissions. Rows are inserted by the engine's `submitBulkWrite()` entry point when a synchronous bulk call would exceed the 1,000-entity threshold (per ADR [`0011`](../adrs/0011-chunked-bulk-ingestion.md)); the Phase 5 Reconciler will claim them via `SELECT ... FOR UPDATE SKIP LOCKED` and drain into `entry_data` + `entry_slots_page_X` using the same chunked-transaction model that the sync path uses. The schema mirrors `stardust_export_jobs` — ADR 0011 explicitly says "artifact path on local disk, identical to the export pattern" — but with two import-specific additions: a durable `(tenant_id, idempotency_key)` unique index that enforces the ADR 0011 idempotency contract at the database level, and an `entry_count` column captured at submission so operators can observe per-tenant queue depth in entities rather than jobs.
+
+| Column            | Type                                                | Description                                                                                                                                                                                                |
+| :---------------- | :-------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`              | `BIGINT`                                            | Primary Key. The Import Job ID returned to the caller of `submitBulkWrite()`.                                                                                                                              |
+| `tenant_id`       | `BIGINT`                                            | Tenant owning the submission. Enforced for isolation on every read; combined with `idempotency_key` to scope idempotency per tenant.                                                                       |
+| `status`          | `ENUM('pending','processing','completed','failed')` | Lifecycle state. Inserted as `pending`; transitions are owned by the Phase 5 Reconciler.                                                                                                                   |
+| `idempotency_key` | `VARCHAR(128)` **NULL**                             | Caller-supplied retry key per ADR [`0011`](../adrs/0011-chunked-bulk-ingestion.md). A retry with the same `(tenant_id, idempotency_key)` pair returns the existing job ID rather than creating a new row.  |
+| `artifact_path`   | `VARCHAR(512)`                                      | Absolute filesystem path to the serialized payload JSON written under `Config::$artifactDir` at submission time. Required (NOT NULL) — the Reconciler needs the payload to process the job.              |
+| `entry_count`     | `INT UNSIGNED`                                      | Number of entities in the submitted payload. Captured at submission for operator observability.                                                                                                            |
+| `manifest`        | `JSON` **NULL**                                     | Per-chunk outcome manifest per ADR [`0011`](../adrs/0011-chunked-bulk-ingestion.md). NULL until the Reconciler begins processing; populated chunk-by-chunk thereafter.                                     |
+| `failed_reason`   | `VARCHAR(64)` **NULL**                              | Set only when `status='failed'`. Closed taxonomy is owned by the Phase 5 Reconciler.                                                                                                                       |
+| `worker_identity` | `VARCHAR(128)` **NULL**                             | Hostname/PID of the claiming Reconciler worker. Mirrors `stardust_export_jobs.worker_identity` and self-aborts on mismatch per ADR [`0025`](../adrs/0025-chronicler-failure-semantics.md).                 |
+| `claimed_at`      | `DATETIME` **NULL**                                 | Set in the same transaction as the `pending → processing` claim.                                                                                                                                         |
+| `heartbeat_at`    | `DATETIME` **NULL**                                 | Refreshed by the Reconciler in every chunk-commit transaction. Drives the abandoned-claim sweep.                                                                                                           |
+| `created_at`      | `DATETIME`                                          | Submission timestamp. Drives FIFO ordering across tenants and the "oldest pending import" operator alert.                                                                                                  |
+| `completed_at`    | `DATETIME` **NULL**                                 | Set when `status` enters `completed` or `failed`.                                                                                                                                                          |
+
+**Indexes and constraints:**
+
+- `PRIMARY KEY (id)`
+- `UNIQUE KEY (tenant_id, idempotency_key)` — enforces ADR [`0011`](../adrs/0011-chunked-bulk-ingestion.md) idempotency. Multiple NULL `idempotency_key` values are permitted (MySQL UNIQUE allows multiple NULLs) so unkeyed submissions never collide with each other.
+- `INDEX (status, created_at)` — supports the Reconciler's pending-job scan with FIFO secondary ordering.
+- `INDEX (tenant_id, status)` — supports per-tenant queue-depth observability.
+- `INDEX (status, heartbeat_at)` — supports the abandoned-claim sweep when the Reconciler grows multi-worker capacity.
+
+> [!NOTE]
+> Phase 3 owns _submission_: it persists the artifact + the row and returns the ID. Status transitions, claim semantics, and `manifest` population are Phase 5 (Reconciler) work — this section documents the column shapes Phase 5 will rely on, not their lifecycle.
