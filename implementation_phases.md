@@ -191,6 +191,7 @@ Full column definitions, index specifications, and atomicity invariants for all 
 | [ADR 0007](adrs/0007-write-availability-over-query-completeness.md) | Write availability over query completeness — motivation for the exhaustion fallback |
 | [ADR 0011](adrs/0011-chunked-bulk-ingestion.md) | Chunked bulk ingestion |
 | [ADR 0013](adrs/0013-json-payload-as-system-of-record.md) | `entry_data.fields` is always the system of record |
+| [ADR 0028](adrs/0028-single-document-json-for-import-artifacts.md) | Single-document JSON for async import job artifacts |
 | [Architecture Blueprint §2.1](architecture_blueprint.md) | Exhaustion fallback and sync queue semantics |
 
 **Exit criteria:**
@@ -269,6 +270,7 @@ Full column definitions, index specifications, and atomicity invariants for all 
 | [ADR 0019](adrs/0019-index-cardinality-policy.md) | Index cardinality policy; periodic cardinality advisory |
 | [ADR 0020](adrs/0020-structured-logging-mandate.md) | Structured logging mandate |
 | [ADR 0027](adrs/0027-persistent-process-daemon-execution-model.md) | Persistent-process execution model; Watcher singleton enforcement |
+| [ADR 0028](adrs/0028-single-document-json-for-import-artifacts.md) | Single-document JSON for async import job artifacts — Reconciler reader contract |
 | [Blueprint: Watcher + Reconciler](blueprints/watcher_reconciler_daemons.md) | Feature spec and acceptance criteria |
 
 **Exit criteria:**
