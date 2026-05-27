@@ -5,7 +5,7 @@
 
 ## Context
 
-StarDust operates three independent background daemons — the Watcher (capacity provisioner), the Reconciler (queue drain and backfill), and the Liberator (slot eviction and capacity reclamation). These daemons have interdependencies: the Reconciler needs to know when new capacity is available (provisioned by the Watcher); the Watcher should be aware of tombstoned slots that the Liberator has not yet swept; the Liberator must not evict slots that the Reconciler is actively backfilling.
+StarDust operates four independent background daemons — the Watcher (capacity provisioner), the Reconciler (queue drain and backfill), the Liberator (slot eviction and capacity reclamation), and the Chronicler (async export materializer). The first three have interdependencies: the Reconciler needs to know when new capacity is available (provisioned by the Watcher); the Watcher should be aware of tombstoned slots that the Liberator has not yet swept; the Liberator must not evict slots that the Reconciler is actively backfilling. The Chronicler is independent of the other three — it claims from its own `stardust_export_jobs` table and reads `entry_data` read-only — but it shares the "database is the only coordination surface" mandate this ADR establishes.
 
 In conventional distributed systems, daemon-to-daemon coordination is accomplished through message queues (RabbitMQ, Redis Streams), pub/sub channels, shared filesystems, or direct IPC (HTTP callbacks, Unix sockets). Each of these introduces an additional infrastructure dependency and a new failure domain — if the message broker goes down, daemons cannot coordinate; if a callback endpoint is unavailable, the notifying daemon must handle the failure.
 
@@ -13,7 +13,7 @@ The zero-dependency core (ADR `0002`) establishes that the system runs on MySQL 
 
 ## Decision
 
-All daemon coordination occurs exclusively through database state. The schema registry tables are the sole communication channel between the Watcher, Reconciler, and Liberator. No message bus, pub/sub channel, shared filesystem, or direct IPC mechanism exists between them.
+All daemon coordination occurs exclusively through database state. The schema registry tables are the sole communication channel between the Watcher, Reconciler, and Liberator. The Chronicler does not coordinate with any other daemon — its claims and lease/heartbeat protocol live entirely inside `stardust_export_jobs` — but the same "database is the only coordination surface" rule binds it. No message bus, pub/sub channel, shared filesystem, or direct IPC mechanism exists between any of the four daemons.
 
 Specifically:
 
@@ -50,7 +50,7 @@ This design eliminates the cache-stall window (the API picks up new capacity wit
 
 - Daemon responsiveness is bounded by polling intervals. The Reconciler cannot react to a Watcher provisioning event faster than its poll cycle, introducing latency in the recovery path after slot exhaustion.
 - Polling introduces unnecessary database load during quiet periods when no coordination events have occurred. Each daemon executes registry queries on every cycle regardless of whether state has changed.
-- The pattern does not scale to a large number of coordinating daemons. With three daemons on configurable polling intervals, the load is negligible. If the daemon count grew significantly, polling-based coordination would require optimization (e.g., conditional polling, exponential backoff).
+- The pattern does not scale to a large number of coordinating daemons. With four daemons (only three of which actually coordinate via the schema registry — the Chronicler reads its own queue table) on configurable polling intervals, the load is negligible. If the daemon count grew significantly, polling-based coordination would require optimization (e.g., conditional polling, exponential backoff).
 
 **Rejected alternatives:**
 

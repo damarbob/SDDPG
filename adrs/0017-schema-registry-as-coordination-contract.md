@@ -5,7 +5,7 @@
 
 ## Context
 
-StarDust's extension tables expose typed but generically named slot columns (`i_str_01`...`i_str_25`, `i_int_01`...`i_int_15`, `i_num_01`...`i_num_10`, `i_dt_01`...`i_dt_10`). These column names carry no domain meaning; `blog_title` may land in `entry_slots_page_2.i_str_01` for one model and in `entry_slots_page_7.i_str_14` for another. Some mechanism must record the mapping from each model field to its physical (page, slot) coordinate so that the payload splitting engine, the read path, and all three daemons agree on where a given field's data lives.
+StarDust's extension tables expose typed but generically named slot columns (`i_str_01`...`i_str_25`, `i_int_01`...`i_int_15`, `i_num_01`...`i_num_10`, `i_dt_01`...`i_dt_10`). These column names carry no domain meaning; `blog_title` may land in `entry_slots_page_2.i_str_01` for one model and in `entry_slots_page_7.i_str_14` for another. Some mechanism must record the mapping from each model field to its physical (page, slot) coordinate so that the payload splitting engine, the read path, and the three slot-aware daemons (Watcher, Reconciler, Liberator) agree on where a given field's data lives. The Chronicler is a fourth daemon but does not consume the slot mapping — it materializes exports from `entry_data.fields` (the JSON system of record per ADR `0013`) and only reads `stardust_fields` as the field-name catalog for header derivation.
 
 The blueprint refers to this mechanism as the "schema registry" across §2.1 (daemon coordination), §2.1.3 (Liberator eviction), §2.1.5 (slot assignment), §2.1.6 (type change), §2.2 (index provisioning), and §4.1 (pre-flight rejection). It is also the load-bearing coordination surface identified in ADR `0015` — the sole channel through which the Watcher, Reconciler, and Liberator communicate.
 
@@ -96,7 +96,7 @@ The schema reference (§4.5 "Read routing per state") includes an explicit `(no 
 
 **Rejected alternatives:**
 
-- Leave the registry schema as implementation detail — the current state. Rejected because the registry is the coordination contract for three daemons, the read path, and the write path; leaving its shape implicit creates silent divergence risk far exceeding the cost of formalization.
+- Leave the registry schema as implementation detail — the current state. Rejected because the registry is the coordination contract for the three slot-aware daemons (Watcher, Reconciler, Liberator), the read path, and the write path (plus a fourth daemon, the Chronicler, that reads `stardust_fields` as a field-name catalog only); leaving its shape implicit creates silent divergence risk far exceeding the cost of formalization.
 - Single flattened table (e.g., merge fields + slot assignments) — rejected because a field without a live slot (pure `JSON_EXTRACT` fallback) is a legitimate state, and a slot without a field (post-sweep `free`) is equally legitimate. Modeling these as the same row forces NULL-heavy columns and obscures the lifecycle.
 - Registry in a separate database or config service — rejected because the registry is read during every write transaction (payload splitting) and many reads (field resolution). Cross-database or cross-service reads add latency and violate the zero-dependency core (ADR `0002`).
 - Status as free-form strings or booleans — rejected because the Liberator, Reconciler, and read path all need to branch on the exact state. A closed ENUM (or CHECK-constrained VARCHAR) catches invalid transitions at write time, not at runtime in a different daemon days later.

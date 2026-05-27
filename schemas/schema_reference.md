@@ -6,7 +6,7 @@
 The schema comprises three concern groups:
 
 1. **Data plane** (§1–§3) — `entry_data`, `entry_slots_page_X`, `stardust_sync_queue`. Stores entry payloads and the indexed projections.
-2. **Schema Registry** (§4) — `stardust_models`, `stardust_fields`, `stardust_pages`, `stardust_slot_assignments`. The coordination contract between the write path, the read path, and the three daemons (ADR [`0017`](../adrs/0017-schema-registry-as-coordination-contract.md)).
+2. **Schema Registry** (§4) — `stardust_models`, `stardust_fields`, `stardust_pages`, `stardust_slot_assignments`. The coordination contract between the write path, the read path, and the three slot-aware daemons (Watcher, Reconciler, Liberator). The Chronicler is a fourth daemon but only reads `stardust_fields` as the field-name catalog for CSV header derivation — it does not consume the slot mapping (ADR [`0017`](../adrs/0017-schema-registry-as-coordination-contract.md)).
 3. **Operational & Coordination** (§5) — `stardust_schema_version`, `stardust_export_jobs`, `stardust_reconciler_dlq`, `backfill_checkpoints`, `stardust_import_jobs`. Tables that exist for daemon coordination, async work, operator triage, and migration state.
 
 ## Entity-Relationship Diagram
@@ -178,7 +178,7 @@ A tiny, dedicated table exclusively for queuing writes that fail due to extensio
 
 ## 4. Schema Registry Tables
 
-> **Normative contract.** The registry is the sole coordination surface between the write path, the read path, and the three daemons (Watcher, Reconciler, Liberator). See ADR [`0017`](../adrs/0017-schema-registry-as-coordination-contract.md) for the rationale and atomicity invariants; ADR [`0015`](../adrs/0015-database-as-sole-daemon-coordination-point.md) for why the registry is the only coordination surface.
+> **Normative contract.** The registry is the sole coordination surface between the write path, the read path, and the three slot-aware daemons (Watcher, Reconciler, Liberator). The Chronicler (fourth daemon) reads `stardust_fields` as a field-name catalog only — it does not consume the slot mapping or participate in registry-mediated coordination. See ADR [`0017`](../adrs/0017-schema-registry-as-coordination-contract.md) for the rationale and atomicity invariants; ADR [`0015`](../adrs/0015-database-as-sole-daemon-coordination-point.md) for why the registry is the only coordination surface.
 
 ### 4.1 `stardust_models` (Model Catalog)
 
@@ -332,7 +332,7 @@ The Chronicler daemon's claim-and-process queue for async export jobs. Rows are 
 | `id`              | `BIGINT`                                            | Primary Key. The job ID exposed to consumers.                                                                                                                                                                                            |
 | `tenant_id`       | `BIGINT`                                            | Tenant owning the job. Enforced for isolation on every read.                                                                                                                                                                             |
 | `status`          | `ENUM('pending','processing','completed','failed')` | Lifecycle state.                                                                                                                                                                                                                         |
-| `filter`          | `JSON`                                              | The validated `QueryFilter` payload submitted by the consumer (see [`queryfilter_wire_format.md`](../blueprints/queryfilter_wire_format.md)).                                                                                            |
+| `filter`          | `JSON`                                              | Envelope of shape `{model_id, filter}`: `model_id` is the engine-stamped target model the Chronicler hydrates on claim; `filter` is the validated `QueryFilter` payload submitted by the consumer (see [`queryfilter_wire_format.md`](../blueprints/queryfilter_wire_format.md)). The envelope keeps the engine's stamping orthogonal to the consumer payload so the Phase 8 QueryFilter validator can read `filter` as-is. |
 | `format`          | `ENUM('csv','json')`                                | Artifact format. Validated at submission, not at materialization.                                                                                                                                                                        |
 | `last_cursor`     | `BIGINT` **NULL**                                   | Most recently processed `entry_data.id` cursor. Updated per chunk. `NULL` until the first chunk commits.                                                                                                                                 |
 | `artifact_path`   | `VARCHAR(512)` **NULL**                             | Absolute filesystem path of the materialized file. Set when `status='completed'`; nulled by GC sweep after TTL.                                                                                                                          |

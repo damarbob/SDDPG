@@ -90,7 +90,7 @@ An independent background daemon responsible exclusively for sweeping "dead" slo
 
 - **The Watcher is a strict singleton.** Multiple Watcher instances racing to provision the same page will cause DDL conflicts despite advisory locking (lock timeouts, duplicate table names). Enforce via PID file or OS-level process locking.
 - **The Reconciler supports multiple workers.** `SELECT ... FOR UPDATE SKIP LOCKED` guarantees row-level mutual exclusion across concurrent workers.
-- **Failure Isolation**: Any daemon can crash independently without affecting the others. If the Watcher dies, the Reconciler continues draining into existing pages with remaining capacity. If the Reconciler dies, the Watcher continues provisioning — the queue grows, but writes never block because the exhaustion fallback (above) keeps ingestion operational. If the Liberator dies, dead slots simply stay `tombstoned` and squat on capacity until it recovers. Ingestion and synchronous retrieval are never blocked by daemon failures.
+- **Failure Isolation**: Any daemon can crash independently without affecting the others. If the Watcher dies, the Reconciler continues draining into existing pages with remaining capacity. If the Reconciler dies, the Watcher continues provisioning — the queue grows, but writes never block because the exhaustion fallback (above) keeps ingestion operational. If the Liberator dies, dead slots simply stay `tombstoned` and squat on capacity until it recovers. If a Chronicler worker dies mid-export, the abandoned-claim sweep on the next surviving worker re-claims the job (heartbeat lapse) and resumes from `last_cursor`; ingestion and synchronous retrieval are never blocked by Chronicler failures because it is a downstream consumer of `entry_data`, not a coordination peer. Ingestion and synchronous retrieval are never blocked by daemon failures.
 
 #### 2.1.5 Slot Assignment Lifecycle
 
@@ -122,7 +122,7 @@ Indexing decisions are **schema-driven**, governed by the `is_filterable` metada
 
 ### 2.3 Schema Registry (Field-to-Slot Mapping)
 
-Slot columns (`i_str_01`, `i_int_15`, etc.) are generically named and carry no domain meaning. The **schema registry** is the database-resident metadata catalog that records which physical slot each model field occupies, the lifecycle state of that slot, and the `is_filterable` flag driving index routing. It is the sole coordination surface shared by the payload splitting engine, the read path, and the three daemons. No daemon signals another except by writing registry state; there is no message bus, pub/sub channel, or direct IPC between them.
+Slot columns (`i_str_01`, `i_int_15`, etc.) are generically named and carry no domain meaning. The **schema registry** is the database-resident metadata catalog that records which physical slot each model field occupies, the lifecycle state of that slot, and the `is_filterable` flag driving index routing. It is the sole coordination surface shared by the payload splitting engine, the read path, and the three slot-aware daemons (Watcher, Reconciler, Liberator). The Chronicler is a fourth daemon but does not coordinate via the registry — it only reads `stardust_fields` as the field-name catalog for CSV header derivation. No daemon signals another except by writing registry state; there is no message bus, pub/sub channel, or direct IPC between them.
 
 The registry is normative, not implementation detail. Its full DDL and normative table definitions are specified in the Schema Reference.
 
@@ -177,7 +177,7 @@ The read path actively avoids the illusion of dynamically tracking "scanned rows
 To maintain the strict synchronous page limits on the read function without abandoning callers who genuinely need massive datasets, StarDust provides an export-job mechanism backed by **The Chronicler**.
 
 - **Job submission (engine API)**: The engine exposes a job-submission function that validates a query filter and persists a job record. How the job is _initiated by an external consumer_ (e.g., an HTTP `POST` from a browser to a caller like StarGate) is the caller's concern, not the engine's.
-- **Background Materialization**: **The Chronicler** — an independent background PHP daemon (separate from the Watcher, Reconciler, and Liberator) — picks up the export job. It seamlessly pages through the database using the same Cursor-Based Pagination described above (Query 1 and Query 2 in a loop) and writes the output locally to a streaming CSV or JSON file on disk.
+- **Background Materialization**: **The Chronicler** — an independent multi-worker background PHP daemon (separate from the Watcher, Reconciler, and Liberator) — picks up the export job. It pages through `entry_data` using the same Cursor-Based Pagination described above (`LIMIT pageSize + 1`, `WHERE id > :cursor`, tenant-scoped) and writes the output locally to a streaming CSV or JSON file on disk. Per-row data is sourced from `entry_data.fields` (the JSON system of record) rather than from slot columns, so exports include every field regardless of indexing.
 - **Result handoff**: Once the Chronicler completes the artifact, the job record reflects the artifact's filesystem path and final status. Delivery to the end consumer (download semantics, polling, retention windows visible to the consumer) is the caller's domain.
 
 ---

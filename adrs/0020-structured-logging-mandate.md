@@ -30,7 +30,7 @@ Every event is a single-line JSON object terminated by `\n` (newline-delimited J
 | :------------ | :------------------------------------------------- | :--------------------------------------------------------------------------------------------------------- |
 | `ts`          | string (RFC 3339 UTC)                              | Event timestamp.                                                                                           |
 | `level`       | string (`debug`/`info`/`warn`/`error`)             | Severity.                                                                                                  |
-| `source`      | string                                             | One of: `watcher`, `reconciler`, `liberator`, `chronicler`, `api`, `bulk_api`, `registry`.                 |
+| `source`      | string                                             | One of: `watcher`, `reconciler`, `liberator`, `chronicler`, `api`, `bulk_api`, `export_api`, `registry`.   |
 | `event`       | string (snake_case)                                | Closed event-name vocabulary per source — see "Event Vocabulary" below.                                    |
 | `tenant_id`   | integer or null                                    | Required for any event tied to tenant-owned data; null for global daemon events.                           |
 | `correlation_id` | string                                          | Per-request UUID for API events, per-cycle UUID for daemon events. Carried through any sub-events emitted within the same operation. |
@@ -46,7 +46,8 @@ Each source declares a closed list of event names in its feature blueprint. Exam
 - `liberator`: `sweep_started`, `sweep_chunk`, `sweep_complete`, `deadlock_retry`, `sweep_gap_flagged`.
 - `chronicler`: `job_claimed`, `job_complete`, `job_failed`, `low_disk`, `artifact_oversized`, `gc_swept`.
 - `api`: `request`, `pre_flight_rejected`, `bulk_accepted`, `payload_too_large`, `cache_miss` (Phase 4 schema-version cache refresh, per ADR `0015`; shares the name with the reconciler-source event below — the `source` field disambiguates).
-- `registry`: `version_bump`, `low_cardinality_index`, `cardinality_sampled`, `page_provisioned`, `slot_reserved`.
+- `export_api`: `export_accepted` (Phase 7 — emitted by the engine-side export submission entry point after the per-tenant active-job cap check + INSERT commits; mirrors the `bulk_api`/`bulk_accepted` pattern for symmetric observability of the two submission surfaces).
+- `registry`: `version_bump`, `low_cardinality_index`, `cardinality_sampled`, `page_provisioned`, `slot_reserved`, `retype_started`, `promote_to_ready`.
 
 Adding a new event name requires a blueprint update. Free-form `printf`-style log lines are not permitted.
 
