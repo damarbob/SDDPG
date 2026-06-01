@@ -73,3 +73,4 @@ Pre-flight validation (`is_filterable`) and schema-cache lookups operate on the 
 - ADR `0014` — Schema-level safety over runtime circuit breaking
 - ADR `0015` — Database as sole daemon coordination point (cache invalidation)
 - [`blueprints/search_driver_adapter.md`](../blueprints/search_driver_adapter.md) — closes Open Question #1
+- [`blueprints/queryfilter_wire_format.md`](../blueprints/queryfilter_wire_format.md) — pins the JSON wire encoding of this closed v1 operator set, the closed error taxonomy, and the normative [`schemas/queryfilter.schema.json`](../schemas/queryfilter.schema.json) artifact (§4.8); note its §4.3 #8 / §4.8 #33 reconciliation of runtime-vs-schema strictness on unknown keys.

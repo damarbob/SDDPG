@@ -50,7 +50,7 @@ This blueprint closes that gap. It pins the exact JSON shape for every operator 
 
 ### 4.3 Leaf operators (closed v1 set — ADR 0021)
 
-8. **Single-value operators** (`eq`, `neq`, `lt`, `lte`, `gt`, `gte`, `prefix`): `value` is exactly one typed primitive matching the field's `declared_type`. Extra keys alongside `value` are ignored; missing `value` is rejected as `node_malformed`.
+8. **Single-value operators** (`eq`, `neq`, `lt`, `lte`, `gt`, `gte`, `prefix`): `value` is exactly one typed primitive matching the field's `declared_type`. Extra keys alongside `value` are ignored (this runtime leniency is intentionally *looser* than the schema's `additionalProperties: false` — see §4.8 [#33](#48-json-schema-artifact)); missing `value` is rejected as `node_malformed`.
 9. **Set operators** (`in`, `nin`): `value` is a JSON array of typed primitives of length 1–1024. The API silently deduplicates entries before driver dispatch. An empty array or an array exceeding 1024 elements is rejected with `value_count_mismatch` or `value_out_of_bounds` respectively.
 10. **Range operator** (`between`): `value` is a 2-element array `[lower, upper]` representing an inclusive range — both bounds are part of the matched set. Both elements MUST be of the same declared type. Any arity other than 2 is rejected with `value_count_mismatch`.
 11. **Presence operators** (`is_null`, `is_not_null`): the `value` key MUST be omitted. A payload that includes any `value` key — even `null` — is rejected with `value_unexpected`. This prevents conflation with value-bearing operators.
@@ -116,6 +116,7 @@ All limits below are defaults. Operators may tune them via configuration keys; t
 
 31. [`schemas/queryfilter.schema.json`](../schemas/queryfilter.schema.json) is the normative machine-checkable specification for the v1 closed operator set and structural rules.
 32. Capability extension operators (per ADR 0022) are **not** representable in the static schema — they are driver-specific and declared at runtime via `supportedOperators()`. The schema validates the closed v1 set only; extension nodes pass schema validation as `operator_unknown` and are accepted or rejected by the runtime pre-flight check.
+33. **Schema-vs-runtime strictness on unknown keys (reconciliation).** The schema sets `additionalProperties: false` on every node, whereas §4.3 [#8](#43-leaf-operators-closed-v1-set--adr-0021) is normative that *extra keys alongside `value` are ignored* at runtime (the closed error set in [#28](#47-error-model) has no "unknown key" code). This is intentional, not a conflict: the schema is the **stricter sender/CI contract** (Postel's law — be strict in what you send), while the decoder is the **liberal runtime acceptor** that tolerates forward-compatible extra keys per §2's version semantics. §4.3 #8 governs runtime behaviour; the schema governs the sender-side lint. The two are locked together on every *other* axis by the in-package `QueryFilterSchemaConformanceTest`, which pins this one deliberate asymmetry with an explicit assertion so it cannot widen unnoticed.
 
 ## 5. Technical Sketch
 
