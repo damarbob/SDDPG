@@ -46,7 +46,7 @@ Raw RAM / CPU / disk sizing is **not** pinned by this ADR. StarDust's resource f
 
 The following documents are updated as part of this ADR landing:
 
-1. [`architecture_blueprint.md`](../architecture_blueprint.md) §1.1 — extends the Operating Environment with a self-contained statement of the daemon execution model requirement, formatted without cross-referencing this ADR (per the README's "blueprint is self-contained" rule).
+1. [`architecture_blueprint.md`](../architecture_blueprint.md) §1.1 — extends the Operating Environment with a statement of the daemon execution model requirement.
 2. [`README.md`](../README.md) — adds a top-level Deployment Requirements section listing the binding capability requirements above and pointing at this ADR.
 3. [`adrs/README.md`](README.md) — adds the index row for this ADR.
 

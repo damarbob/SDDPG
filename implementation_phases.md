@@ -17,8 +17,8 @@ The architectural practice of recording decisions as ADRs is itself documented i
 
 When design documents disagree, this is the resolution order (strongest → weakest):
 
-1. **[Architecture Blueprint](architecture_blueprint.md)** — sole source of truth. Self-contained by design and references no other document.
-2. **ADRs** ([`adrs/`](adrs/)) — record the decisions that shape the architecture. ADRs form a one-way dependency chain: newer ADRs may reference older ones, never the reverse. On conflict between two ADRs, the newer ADR wins.
+1. **ADRs** ([`adrs/`](adrs/)) — the authoritative source of truth. They record the decisions that shape the architecture and govern over every other document on conflict. ADRs form a one-way dependency chain: newer ADRs may reference older ones, never the reverse. On conflict between two ADRs, the newer ADR wins.
+2. **[Architecture Blueprint](architecture_blueprint.md)** — the synthesis of the architecture beneath the ADRs. It MAY cite the ADRs it derives from; where it diverges from an ADR, the ADR governs.
 3. **Component blueprints** ([`blueprints/`](blueprints/)) — feature-level specs derived from the architecture and ADRs.
 4. **[Schema Reference](schemas/schema_reference.md)** — normative table definitions; follows the design above it.
 5. **This document** (`implementation_phases.md`) — sequencer only; never overrides any design document.

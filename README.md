@@ -132,6 +132,6 @@ See [`adrs/0027-persistent-process-daemon-execution-model.md`](adrs/0027-persist
 - **Naming**: lowercase with underscores (e.g., `migration_plan.md`, not `MigrationPlan.md`).
 - **ADR numbering**: `NNNN-short-title.md` (e.g., `0001-extension-tables-over-eav.md`).
 - **Immutability**: ADRs are append-only. To supersede a decision, create a new ADR referencing the old one — never edit the original.
-- **Architecture Blueprint is the sole source of truth**: `architecture_blueprint.md` MUST NOT reference any other document in this repository. It is self-contained by design.
+- **ADRs are the source of truth**: Architecture Decision Records in [`adrs/`](adrs/) are the strongest documents in this repository; on any conflict, the relevant ADR governs. `architecture_blueprint.md` is a synthesis beneath them and MAY cite the ADRs it derives from.
 - **ADR reference direction**: only newer ADRs may reference older ADRs — never the reverse. This keeps the ADR dependency graph a strict DAG and prevents circular reasoning.
-- **Document precedence on conflict**: the full resolution order (blueprint → ADRs → component blueprints → schema reference) is defined in [`implementation_phases.md`](implementation_phases.md#document-precedence).
+- **Document precedence on conflict**: the full resolution order (ADRs → blueprint → component blueprints → schema reference) is defined in [`implementation_phases.md`](implementation_phases.md#document-precedence).
