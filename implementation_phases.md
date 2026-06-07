@@ -293,13 +293,14 @@ Full column definitions, index specifications, and atomicity invariants for all 
 
 **Deliverables:**
 
-- **Liberator daemon:** independent polling loop; scans `stardust_slot_assignments` for `status = 'tombstoned'` rows; executes chunked `UPDATE entry_slots_page_X SET i_XX = NULL WHERE tenant_id = ? AND entry_id > ? LIMIT 500` nullification without locking; on confirmed 100% nullification transitions the slot `tombstoned → free` in the same transaction as the final `UPDATE` batch; emits the closed structured-log event vocabulary declared in [liberator_daemon.md §4 AC#11](blueprints/liberator_daemon.md) (`sweep_started`, `sweep_chunk`, `sweep_complete`, `deadlock_retry`, `sweep_gap_flagged`). No event names outside this list are permitted.
+- **Liberator daemon:** independent polling loop; scans `stardust_slot_assignments` for `status = 'tombstoned'` rows; executes chunked `UPDATE entry_slots_page_X SET i_XX = NULL WHERE entry_id > ? LIMIT 500` nullification without locking (no `tenant_id` predicate per ADR 0029 — single-owner column); on confirmed 100% nullification transitions the slot `tombstoned → free` in the same transaction as the final `UPDATE` batch; emits the closed structured-log event vocabulary declared in [liberator_daemon.md §4 AC#11](blueprints/liberator_daemon.md) (`sweep_started`, `sweep_chunk`, `sweep_complete`, `deadlock_retry`, `sweep_gap_flagged`). No event names outside this list are permitted.
 
 **References:**
 
 | ADR | Decision |
 | :--- | :--- |
 | [ADR 0009](adrs/0009-tombstone-based-slot-eviction.md) | Tombstone-based slot eviction strategy |
+| [ADR 0029](adrs/0029-liberator-sweep-omits-tenant-predicate.md) | Liberator sweep omits the `tenant_id` predicate (refines ADR 0009) |
 | [ADR 0027](adrs/0027-persistent-process-daemon-execution-model.md) | Persistent-process execution model; Liberator singleton enforcement |
 | [Blueprint: Liberator](blueprints/liberator_daemon.md) | Liberator feature spec and acceptance criteria |
 | [Architecture Blueprint §2.1.3](architecture_blueprint.md) | Liberator sweep mechanics |
@@ -460,3 +461,5 @@ Every accepted ADR is referenced by at least one phase above.
 | [0025](adrs/0025-chronicler-failure-semantics.md) — Chronicler Failure Semantics | 7 |
 | [0026](adrs/0026-framework-neutral-composer-packaging.md) — Framework-Neutral Composer Packaging | 0 (cross-phase), 8 |
 | [0027](adrs/0027-persistent-process-daemon-execution-model.md) — Persistent-Process Daemon Execution Model | 0, 5, 6a, 7 |
+| [0028](adrs/0028-single-document-json-for-import-artifacts.md) — Single-Document JSON for Import Artifacts | 3, 5 |
+| [0029](adrs/0029-liberator-sweep-omits-tenant-predicate.md) — Liberator Sweep Omits Tenant Predicate (refines 0009) | 6a |

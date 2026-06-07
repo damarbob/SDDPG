@@ -20,7 +20,7 @@ StarDust is a daemonized engine: ingestion and synchronous reads are served by t
 
 StarDust enforces **tenant isolation** — it does not perform tenant resolution or tenant management. These two halves of multi-tenancy are owned at different layers:
 
-- **StarDust (isolation).** Every query, daemon sweep, and export job carries a `tenant_id` predicate. Composite indexes lead with `tenant_id`. Cross-tenant access is forbidden by default; any future operation that genuinely needs it (admin tooling, fleet metrics) must be a separately named function with its own structured-log event.
+- **StarDust (isolation).** Every query, daemon sweep, and export job carries a `tenant_id` predicate. Composite indexes lead with `tenant_id`. Cross-tenant access is forbidden by default; any future operation that genuinely needs it (admin tooling, fleet metrics) must be a separately named function with its own structured-log event. **One governed exception:** the Liberator's tombstone sweep (§2.1.3) omits the `tenant_id` predicate because a slot column is single-owner by `UNIQUE (page_id, slot_column)` and the tenant is unrecoverable once `field_id` is nulled at tombstone time — see ADR [`0029`](adrs/0029-liberator-sweep-omits-tenant-predicate.md).
 - **StarGate (resolution + management).** StarGate — the HTTP consumer of StarDust — owns authentication, the caller-credential → `tenant_id` mapping, and all tenant lifecycle operations (CRUD, provisioning, deactivation, quota policy). These are out of scope for StarDust entirely.
 
 #### Engine boundary contract
@@ -83,7 +83,7 @@ An independent background daemon responsible exclusively for sweeping "dead" slo
 
 - **Eviction Triggers**: If a field is entirely deleted or its `is_filterable` flag is demoted to `false`, its physical mapping (e.g., `i_str_01`) is immediately severed in the Schema Registry. The API instantly falls back to `JSON_EXTRACT` for subsequent queries (see §3).
 - **Tombstoning**: To prevent data bleeding (where a newly mapped field accidentally inherits old data), the severed slot is marked `tombstoned` in the registry. It cannot be mapped to a new field for that model.
-- **Background Sweeping**: The Liberator lazily processes tombstoned slots without locking tables, executing chunked DML nullification (`UPDATE entry_slots_page_X SET i_str_XX = NULL WHERE tenant_id = ? AND id > ? LIMIT 500`).
+- **Background Sweeping**: The Liberator lazily processes tombstoned slots without locking tables, executing chunked DML nullification (`UPDATE entry_slots_page_X SET i_str_XX = NULL WHERE id > ? LIMIT 500`). No `tenant_id` predicate is needed: `UNIQUE (page_id, slot_column)` makes each slot column single-owner, so only one tenant ever held data in it — see ADR [`0029`](adrs/0029-liberator-sweep-omits-tenant-predicate.md).
 - **Capacity Reclamation**: Once The Liberator confirms a slot is 100% nullified for a tenant/model partition, it updates the registry to mark the slot `free`, making it safely available for a new indexable field.
 
 #### 2.1.4 Coordination & Concurrency Constraints

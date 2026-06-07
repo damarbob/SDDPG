@@ -14,7 +14,7 @@ The Watcher and Reconciler each have such a blueprint ([`watcher_reconciler_daem
 
 - **The Liberator**: A singleton PHP CLI daemon (`bin/stardust liberator`) that:
   - Polls `stardust_slot_assignments` for rows in `status = 'tombstoned'`.
-  - Sweeps each tombstoned slot via chunked `UPDATE entry_slots_page_X SET <slot_column> = NULL WHERE tenant_id = ? AND id > ? LIMIT 500`.
+  - Sweeps each tombstoned slot via chunked `UPDATE entry_slots_page_X SET <slot_column> = NULL WHERE id > ? LIMIT 500` (no `tenant_id` predicate — the slot column is single-owner by `UNIQUE (page_id, slot_column)`; see AC#3 and [ADR 0029](../adrs/0029-liberator-sweep-omits-tenant-predicate.md)).
   - Commits `sweep_cursor_id` advancement in the **same transaction** as the chunk's `UPDATE` (per [ADR 0009](../adrs/0009-tombstone-based-slot-eviction.md)).
   - Transitions the slot from `tombstoned → free` once the per-slot sweep cursor reaches the partition's `MAX(id)` and the final nullification batch commits.
 - **Sweep ordering**: oldest-`tombstoned_at` first, tie-broken by `(page_id, slot_column)`.
@@ -39,7 +39,7 @@ The Watcher and Reconciler each have such a blueprint ([`watcher_reconciler_daem
 
 ### Sweep correctness
 
-3. For each row in `stardust_slot_assignments` with `status = 'tombstoned'`, the Liberator nullifies every value in the corresponding `(page, slot_column)` for `id > sweep_cursor_id`, in chunks of `LIMIT 500`, until the partition's `MAX(id)` is reached.
+3. For each row in `stardust_slot_assignments` with `status = 'tombstoned'`, the Liberator nullifies every value in the corresponding `(page, slot_column)` for `id > sweep_cursor_id`, in chunks of `LIMIT 500`, until the partition's `MAX(id)` is reached. This is the **normative sweep shape**: keyed on `(page, slot_column)` for `id > sweep_cursor_id` with **no `tenant_id` predicate**. The predicate is redundant — `UNIQUE (page_id, slot_column)` makes each slot column single-owner (one model, one tenant), so only one tenant ever held data in it — and is unavailable in any case because `field_id` is `NULL` once tombstoned. See [ADR 0029](../adrs/0029-liberator-sweep-omits-tenant-predicate.md), which refines [ADR 0009](../adrs/0009-tombstone-based-slot-eviction.md) on this point.
 4. The chunk's `UPDATE` and the `sweep_cursor_id` advancement on `stardust_slot_assignments` commit in **one transaction**. There is no observable window where the slot's nullified rows are durable but the registry cursor lags.
 5. On final-chunk commit (the chunk that consumes the last `id > sweep_cursor_id` rows), the same transaction also flips the row from `status = 'tombstoned'` to `status = 'free'` and clears `field_id` (already NULL by construction per [ADR 0017](../adrs/0017-schema-registry-as-coordination-contract.md), but explicitly re-asserted).
 6. After `sweep_complete`, the freed slot satisfies the partial-unique constraint `UNIQUE (page_id, slot_column)` and is eligible for assignment by the schema-registry slot-reservation path (§2.1.5).
@@ -67,13 +67,13 @@ The Watcher and Reconciler each have such a blueprint ([`watcher_reconciler_daem
 
 ```mermaid
 flowchart TD
-    L1["Poll: SELECT slot_assignment_id, page_id, slot_column, sweep_cursor_id, tenant_id\nFROM stardust_slot_assignments\nWHERE status = 'tombstoned'\nORDER BY tombstoned_at ASC, page_id, slot_column"] --> L2{"Rows claimed?"}
+    L1["Poll: SELECT slot_assignment_id, page_id, slot_column, sweep_cursor_id\nFROM stardust_slot_assignments\nWHERE status = 'tombstoned'\nORDER BY tombstoned_at ASC, page_id, slot_column"] --> L2{"Rows claimed?"}
     L2 -- No --> L3["Sleep idle_interval"]
     L3 --> L1
     L2 -- Yes --> L4["For each tombstoned slot:"]
     L4 --> L5["Emit sweep_started"]
     L5 --> L6["BEGIN TX"]
-    L6 --> L7["UPDATE entry_slots_page_X\nSET <slot_column> = NULL\nWHERE tenant_id = ? AND id > sweep_cursor_id\nLIMIT 500"]
+    L6 --> L7["UPDATE entry_slots_page_X\nSET <slot_column> = NULL\nWHERE id > sweep_cursor_id\nLIMIT 500"]
     L7 --> L8["UPDATE stardust_slot_assignments\nSET sweep_cursor_id = MAX(id processed)\nWHERE slot_assignment_id = ?"]
     L8 --> L9{"Last chunk?\n(rows_affected < 500)"}
     L9 -- No --> L10["COMMIT"]
