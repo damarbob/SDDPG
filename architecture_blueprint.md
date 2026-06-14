@@ -50,7 +50,7 @@ MySQL is treated strictly as a transactional store, not a catch-all search engin
 - **`entry_slots_page_X` (1:1 Extension Tables)**
   - `entry_id` (BIGINT, Primary Key / Foreign Key `ON DELETE CASCADE`)
   - `tenant_id` (BIGINT)
-  - `i_str_01`...`i_str_25` (VARCHAR), `i_int_01`...`i_int_15` (BIGINT), `i_num_01`...`i_num_10` (DOUBLE), `i_dt_01`...`i_dt_10` (DATETIME)
+  - `i_str_01`...`i_str_25` (TEXT, 766-char prefix index per ADR 0030), `i_int_01`...`i_int_15` (BIGINT), `i_num_01`...`i_num_10` (DOUBLE), `i_dt_01`...`i_dt_10` (DATETIME)
   - **⚠️ Selective Indexing**: Indexes are governed by the Index Provisioning Policy (§2.2).
 
 ### 2.1 Automated Page Provisioning & Exhaustion Fallback

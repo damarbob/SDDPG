@@ -33,7 +33,7 @@ erDiagram
     entry_slots_page_X {
         BIGINT entry_id PK, FK "ON DELETE CASCADE"
         BIGINT tenant_id
-        VARCHAR i_str_01 "to i_str_25"
+        TEXT i_str_01 "to i_str_25 (766-char prefix index, ADR 0030)"
         BIGINT i_int_01 "to i_int_15"
         DOUBLE i_num_01 "to i_num_10"
         DATETIME i_dt_01 "to i_dt_10"
@@ -152,11 +152,14 @@ The primary transactional storage for all entries. It stores the complete, unind
 
 1:1 extension tables that store explicitly indexed fields for rapid filtering and lookup. A new page is dynamically provisioned when capacity runs low.
 
+> [!NOTE]
+> **String slot storage (ADR [`0030`](../adrs/0030-string-slot-storage-type-and-index-prefix.md)).** String slots are `TEXT` so they hold the full 4096-char QueryFilter string bound. `VARCHAR(4096)` is impossible — 25 such columns exceed MySQL's 65,535-byte row-definition limit (errno 1118). A filterable string slot's composite index covers a **766-char prefix** (`(tenant_id, i_str_NN(766))` = 3072 bytes, the InnoDB key limit under `ROW_FORMAT=DYNAMIC`, which the page DDL pins explicitly); MySQL rechecks the full value behind every prefix-index access, so all filter operators stay exact.
+
 | Column                  | Type       | Description                                                                 |
 | :---------------------- | :--------- | :-------------------------------------------------------------------------- |
 | `entry_id`              | `BIGINT`   | Primary Key. Foreign Key referencing `entry_data.id` (`ON DELETE CASCADE`). |
 | `tenant_id`             | `BIGINT`   | Used to ensure `INNER JOIN` matches across pages are secure.                |
-| `i_str_01`...`i_str_25` | `VARCHAR`  | Indexed string slots.                                                       |
+| `i_str_01`...`i_str_25` | `TEXT`     | Indexed string slots; 766-char prefix index per ADR 0030 (see note above).  |
 | `i_int_01`...`i_int_15` | `BIGINT`   | Indexed integer slots.                                                      |
 | `i_num_01`...`i_num_10` | `DOUBLE`   | Indexed numeric (float/double) slots.                                       |
 | `i_dt_01`...`i_dt_10`   | `DATETIME` | Indexed date/time slots.                                                    |

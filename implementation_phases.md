@@ -156,6 +156,7 @@ Full column definitions, index specifications, and atomicity invariants for all 
 | [ADR 0003](adrs/0003-schema-driven-index-provisioning.md) | Schema-driven index provisioning via `is_filterable` |
 | [ADR 0012](adrs/0012-immutable-extension-page-ddl.md) | Immutable extension page DDL — no `ALTER TABLE` on populated pages |
 | [ADR 0019](adrs/0019-index-cardinality-policy.md) | Index cardinality policy |
+| [ADR 0030](adrs/0030-string-slot-storage-type-and-index-prefix.md) | String slots are `TEXT` with a 766-char prefix index (`ROW_FORMAT=DYNAMIC`) |
 | [Architecture Blueprint §2.1.5](architecture_blueprint.md) | Slot assignment lifecycle |
 | [Architecture Blueprint §2.2](architecture_blueprint.md) | Index Provisioning Policy |
 
@@ -463,3 +464,4 @@ Every accepted ADR is referenced by at least one phase above.
 | [0027](adrs/0027-persistent-process-daemon-execution-model.md) — Persistent-Process Daemon Execution Model | 0, 5, 6a, 7 |
 | [0028](adrs/0028-single-document-json-for-import-artifacts.md) — Single-Document JSON for Import Artifacts | 3, 5 |
 | [0029](adrs/0029-liberator-sweep-omits-tenant-predicate.md) — Liberator Sweep Omits Tenant Predicate (refines 0009) | 6a |
+| [0030](adrs/0030-string-slot-storage-type-and-index-prefix.md) — String Slot Storage Type and Index Prefix | 2, 8 |
