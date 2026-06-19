@@ -42,7 +42,7 @@ Source-specific fields layer on top: the Reconciler adds `chunk_id`, `rows_claim
 Each source declares a closed list of event names in its feature blueprint. Examples:
 
 - `watcher`: `poll_started`, `poll_complete`, `provision_started`, `provision_complete`, `provision_failed`, `lock_contention`.
-- `reconciler`: `chunk_claimed`, `chunk_complete`, `chunk_partial` (some rows DLQ'd), `dlq_inserted`, `cache_miss`, `capacity_wait`, `coercion_null` (payload in `blueprints/watcher_reconciler_daemons.md` §7).
+- `reconciler`: `chunk_claimed`, `chunk_complete`, `chunk_partial` (some rows DLQ'd), `dlq_inserted`, `cache_miss`, `capacity_wait`, `coercion_null`, `lease_lost` (import-job abandoned-claim recovery: the prior worker self-aborts on a `worker_identity` mismatch and the re-claimer owns terminal state, mirroring the chronicler per ADR `0025`) (payload in `blueprints/watcher_reconciler_daemons.md` §7).
 - `liberator`: `sweep_started`, `sweep_chunk`, `sweep_complete`, `deadlock_retry`, `sweep_gap_flagged`.
 - `chronicler`: `job_claimed`, `job_complete`, `job_failed`, `low_disk`, `artifact_oversized`, `gc_swept`.
 - `api`: `request`, `pre_flight_rejected`, `bulk_accepted`, `payload_too_large`, `cache_miss` (Phase 4 schema-version cache refresh, per ADR `0015`; shares the name with the reconciler-source event below — the `source` field disambiguates).

@@ -445,7 +445,7 @@ The Reconciler daemon's claim-and-process queue for async bulk-ingest submission
 - `UNIQUE KEY (tenant_id, idempotency_key)` — enforces ADR [`0011`](../adrs/0011-chunked-bulk-ingestion.md) idempotency. Multiple NULL `idempotency_key` values are permitted (MySQL UNIQUE allows multiple NULLs) so unkeyed submissions never collide with each other.
 - `INDEX (status, created_at)` — supports the Reconciler's pending-job scan with FIFO secondary ordering.
 - `INDEX (tenant_id, status)` — supports per-tenant queue-depth observability.
-- `INDEX (status, heartbeat_at)` — supports the abandoned-claim sweep when the Reconciler grows multi-worker capacity.
+- `INDEX (status, heartbeat_at)` — backs the abandoned-claim sweep: `ImportJobWorkSource` re-claims a `processing` job whose `heartbeat_at` lapsed past the lease timeout and resumes from the `manifest` checkpoint (implemented 2026-06-18, mirroring the chronicler per ADR [`0025`](../adrs/0025-chronicler-failure-semantics.md)).
 
 > [!NOTE]
 > Phase 3 owns _submission_: it persists the artifact + the row and returns the ID. Status transitions, claim semantics, and `manifest` population are Phase 5 (Reconciler) work — this section documents the column shapes Phase 5 will rely on, not their lifecycle.
