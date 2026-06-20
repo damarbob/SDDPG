@@ -97,7 +97,7 @@ Two constraints apply to every phase and must not regress once established:
 - [ ] A smoke-test query confirms partial unique indexes are supported: `CREATE UNIQUE INDEX … WHERE …` succeeds.
 - [ ] A smoke-test query confirms CTEs are available: `WITH cte AS (SELECT 1) SELECT * FROM cte` succeeds.
 - [ ] MariaDB rejection: the same smoke suite exits non-zero when pointed at a MariaDB instance.
-- [ ] `composer.json` has zero entries under `require` other than `php`, the `ext-*` mysqli/pdo_mysql extension, `psr/log`, and `psr/clock` (the two interface-only packages explicitly permitted by [ADR 0026](adrs/0026-framework-neutral-composer-packaging.md)).
+- [ ] `composer.json` has zero entries under `require` other than `php`, the `ext-pdo` / `ext-pdo_mysql` extensions, `psr/log`, and `psr/clock` (the two interface-only packages explicitly permitted by [ADR 0026](adrs/0026-framework-neutral-composer-packaging.md)).
 
 ---
 
