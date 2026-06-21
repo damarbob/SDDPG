@@ -1,6 +1,6 @@
 # 0005 - Two-Query Bounded Read Path
 
-**Status:** Proposed
+**Status:** Accepted
 **Created:** 2026-04-14
 
 ## Context
