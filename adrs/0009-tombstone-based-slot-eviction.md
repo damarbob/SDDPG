@@ -1,6 +1,6 @@
 # 0009 - Tombstone-Based Slot Eviction over Immediate Reuse
 
-**Status:** Proposed
+**Status:** Accepted
 **Created:** 2026-04-16
 
 ## Context
