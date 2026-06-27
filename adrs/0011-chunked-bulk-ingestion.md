@@ -1,6 +1,6 @@
 # 0011 - Chunked Bulk Ingestion with Per-Chunk Transaction Scoping
 
-**Status:** Proposed
+**Status:** Accepted
 **Created:** 2026-04-18
 
 ## Context
@@ -19,10 +19,10 @@ Transactions are scoped to the chunk, not to the entire batch or to individual r
 
 ### Synchronous vs. Asynchronous Submission
 
-Chunked transactions solve InnoDB safety, but a long-running synchronous call introduces a second failure mode: the upstream caller's transport (e.g., an HTTP request via StarGate) can drop mid-batch. When that happens, the engine has no way to deliver the per-chunk success/failure manifest, and the upstream caller cannot determine which chunks committed without re-reading every entity by external ID. The engine's bulk-ingest function therefore distinguishes two submission modes by size, routing large batches through the same async-job pattern as the export path (ADR `0010`):
+Chunked transactions solve InnoDB safety, but a long-running synchronous call introduces a second failure mode: the upstream caller's transport (e.g., an HTTP request via StarGate) can drop mid-batch. When that happens, the engine has no way to deliver the per-chunk success/failure manifest, and the upstream caller cannot determine which chunks committed without re-reading every entity by external ID. The engine's bulk-ingest function therefore distinguishes two submission modes by size, routing large batches through the same async-job pattern as the export path (ADR [`0010`](0010-asynchronous-exports.md)):
 
 - **Synchronous mode: ≤ 1,000 entities per call.** Below this size, the bulk-ingest function processes the batch inline using the chunked-transaction model above and returns a single result enumerating per-chunk outcomes. End-to-end wall time is bounded such that typical caller-side timeouts (60s) will not trigger.
-- **Asynchronous mode: > 1,000 entities per call.** Calls exceeding the synchronous threshold MUST go through the engine's bulk-ingest **job submission** function: it validates the payload, persists it to a job record (artifact path on local disk, identical to the export pattern), returns an Import Job ID immediately, and enqueues the job for the **Reconciler** to process — no separate "Importer" daemon is introduced. Calling the synchronous bulk-ingest function with a > 1,000-entity batch throws a `payload_too_large` exception carrying a pointer to the async submission path.
+- **Asynchronous mode: > 1,000 entities per call.** Calls exceeding the synchronous threshold MUST go through the engine's bulk-ingest **job submission** function: it validates the payload, persists it to a job record (artifact path on local disk, identical to the export pattern — see [`blueprints/chronicler_daemon.md`](../blueprints/chronicler_daemon.md)), returns an Import Job ID immediately, and enqueues the job for the **Reconciler** to process — no separate "Importer" daemon is introduced. Calling the synchronous bulk-ingest function with a > 1,000-entity batch throws a `payload_too_large` exception carrying a pointer to the async submission path.
 - **Status and manifest.** The job record carries the current status (`pending | processing | completed | failed`) and, for jobs that have produced any chunks, a manifest enumerating each chunk's outcome (`committed | rolled_back | failed`), the entity ID range, and any failure reason. The manifest is durable in the job row and survives caller reconnects — partial-success state never depends on holding any synchronous connection open.
 - **Idempotency.** Both modes accept an optional idempotency key. A retry with the same key returns the original job's status and manifest rather than re-processing — the caller can safely retry on connection failure without risking duplicate ingestion.
 
@@ -52,3 +52,9 @@ The threshold value is configurable per deployment but the **shape** of the cont
 - Savepoints within a single outer transaction — provides per-chunk rollback semantics but the outer transaction still grows unboundedly. The undo log, lock duration, and replication lag problems are not solved because the outer transaction does not commit until the entire batch completes.
 - Synchronous-only with arbitrary payload size — leaves the dropped-connection failure mode unaddressed. Even with bounded chunks, a 60-second batch is statistically guaranteed to drop occasionally on a busy reverse proxy, leaving the consumer blind to which chunks committed.
 - Dedicated "Importer" daemon parallel to the Reconciler — duplicates the Reconciler's existing chunked-write infrastructure (configurable chunk size, throttle, `SKIP LOCKED` claim semantics) without benefit. The Reconciler is already designed to drain queued work into extension tables; routing bulk imports through it reuses that machinery rather than duplicating it.
+
+## Related
+
+- ADR [`0010`](0010-asynchronous-exports.md) — The async-job pattern this ADR's asynchronous path reuses. **Relocated to StarGate** (2026-05-04); the engine-side residue (artifact-on-disk job record + `FOR UPDATE SKIP LOCKED` claim semantics) lives in [`blueprints/chronicler_daemon.md`](../blueprints/chronicler_daemon.md). Note: the import path reuses the *shape* via the **Reconciler** (`ImportJobWorkSource`), not the Chronicler — no separate "Importer" daemon.
+- ADR [`0025`](0025-chronicler-failure-semantics.md) — Failure semantics (deadlock budget, lease/heartbeat self-abort) the import work source mirrors.
+- ADR [`0028`](0028-single-document-json-for-import-artifacts.md) — Single-document JSON format for the import artifacts this ADR persists to disk.
