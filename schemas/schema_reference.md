@@ -9,16 +9,62 @@ The schema comprises three concern groups:
 2. **Schema Registry** (§4) — `stardust_models`, `stardust_fields`, `stardust_pages`, `stardust_slot_assignments`. The coordination contract between the write path, the read path, and the three slot-aware daemons (Watcher, Reconciler, Liberator). The Chronicler is a fourth daemon but only reads `stardust_fields` as the field-name catalog for CSV header derivation — it does not consume the slot mapping (ADR [`0017`](../adrs/0017-schema-registry-as-coordination-contract.md)).
 3. **Operational & Coordination** (§5) — `stardust_schema_version`, `stardust_export_jobs`, `stardust_reconciler_dlq`, `backfill_checkpoints`, `stardust_import_jobs`. Tables that exist for daemon coordination, async work, operator triage, and migration state.
 
+## Concern Groups (High-Level Map)
+
+The three concern groups above are not just a documentation convention — they are a **physical boundary**. Foreign keys exist only *within* a group; **no foreign key ever crosses a group boundary**. Cross-group links are logical references only: a column that holds the same value as another table's key, enforced by application code, not by the database. This keeps the high-volume data plane decoupled from the small registry catalog and the operational queues, so registry mutations and daemon bookkeeping never take referential-integrity locks on the write-hot `entry_data` table.
+
+```mermaid
+flowchart TB
+    subgraph DP["Data Plane (§1–§3) — the actual records; system of record"]
+        ed["entry_data<br/>(id PK)"]
+        esp["entry_slots_page_X<br/>(entry_id PK + FK)"]
+        sq["stardust_sync_queue<br/>(entry_id)"]
+    end
+
+    subgraph REG["Schema Registry (§4) — the catalog / coordination contract"]
+        sm["stardust_models<br/>(id PK)"]
+        sf["stardust_fields<br/>(id PK)"]
+        sp["stardust_pages<br/>(id PK)"]
+        ssa["stardust_slot_assignments<br/>(id PK)"]
+    end
+
+    subgraph OPS["Operational & Coordination (§5) — daemon queues & bookkeeping"]
+        sv["stardust_schema_version"]
+        ej["stardust_export_jobs"]
+        ij["stardust_import_jobs"]
+        dlq["stardust_reconciler_dlq"]
+        bc["backfill_checkpoints"]
+    end
+
+    %% Real foreign keys (solid) — enforced by InnoDB, and ONLY within a group.
+    esp ==>|"FK · ON DELETE CASCADE"| ed
+    sf  ==>|FK| sm
+    ssa ==>|FK| sf
+    ssa ==>|FK| sp
+
+    %% Logical references (dashed) — same-valued column, deliberately NO FK.
+    ed  -. "model_id — logical, no FK" .-> sm
+    sq  -. "entry_id — logical, no FK" .-> ed
+    dlq -. "entry_id — no FK (survives entry_data deletion)" .-> ed
+```
+
+> **Reading this map:** a solid arrow (`==>`) is a database-enforced foreign key; a dashed arrow (`-.->`) is a logical reference with no constraint. Every dashed arrow crosses a group boundary; every solid arrow stays inside one. `entry_data.model_id → stardust_models.id` is the canonical example of a deliberate logical-only link (data plane never foreign-keys into the registry). The detailed ERD below carries the same distinction on the relationship lines.
+
 ## Entity-Relationship Diagram
 
 ```mermaid
 erDiagram
-    entry_data ||--o| entry_slots_page_X : "1:1 Extension"
-    entry_data ||--o{ stardust_sync_queue : "Enqueues on failure"
+    %% Solid (--) = real, InnoDB-enforced foreign key.
+    entry_data ||--o| entry_slots_page_X : "1:1 Extension (FK, ON DELETE CASCADE)"
+    stardust_models ||--o{ stardust_fields : "has many (FK)"
+    stardust_fields ||--o| stardust_slot_assignments : "mapped to (0..1 live) (FK)"
+    stardust_pages ||--o{ stardust_slot_assignments : "owns slots (FK)"
 
-    stardust_models ||--o{ stardust_fields : "has many"
-    stardust_fields ||--o| stardust_slot_assignments : "mapped to (0..1 live)"
-    stardust_pages ||--o{ stardust_slot_assignments : "owns slots"
+    %% Dashed (..) = logical reference only — same-valued column, deliberately NO FK.
+    %% These are the links that cross a concern-group boundary (see High-Level Map).
+    entry_data ||..o{ stardust_sync_queue : "entry_id — logical, no FK"
+    stardust_models ||..o{ entry_data : "model_id — logical, no FK"
+    entry_data ||..o{ stardust_reconciler_dlq : "entry_id — no FK (survives deletion)"
 
     entry_data {
         BIGINT id PK
