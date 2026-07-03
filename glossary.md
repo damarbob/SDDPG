@@ -160,7 +160,7 @@ A boolean metadata flag in the schema registry, set at model-field registration 
 
 The deterministic, schema-driven rules governing which extension table slots receive B-tree indexes. Indexing decisions are tied to the `is_filterable` metadata flag: only slots mapped to fields with `is_filterable = true` are indexed at page creation time. This ensures index provisioning is auditable and never ad-hoc.
 
-**See also:** `is_filterable`, Pre-Flight Rejection, Extension Table.
+**See also:** `is_filterable`, Pre-Flight Rejection, Extension Table, Model-Affine Slot Reservation.
 
 ---
 
@@ -169,6 +169,15 @@ The deterministic, schema-driven rules governing which extension table slots rec
 A user-defined data structure (schema) within a tenant, identified by `model_id`. A model defines the set of fields, their types, and their slot mappings in extension tables. All entries belong to exactly one model.
 
 **See also:** Entry, Tenant, Schema Registry.
+
+---
+
+### Model-Affine Slot Reservation
+
+The slot-reservation policy that biases the slot reserver toward free Slots on Pages that already host a live slot of the **same Model**, falling back to the global-oldest-free order when no affine slot of the required type family exists. It is a bias, not an allocation: a model never reserves or owns whole pages, and an affine page's free slots stay available to every other model and tenant. The policy reduces Spread at its source — keeping a model's filterable slots co-located so filtered reads touch fewer pages — without sacrificing slot density, because it only reorders candidates within the existing free-slot pool and never provisions a page the Watcher would not otherwise create. Affinity is forward-only prevention: it keeps fresh and incrementally-grown models compact, but it does not converge models that are already spread (that is operator-initiated compaction) and cannot beat per-family slot ceilings. Specified by [ADR 0032](adrs/0032-model-affine-slot-reservation.md).
+
+**Aliases:** Slot Affinity.
+**See also:** Spread, Slot, Page, Index Provisioning Policy, [ADR 0032](adrs/0032-model-affine-slot-reservation.md), [ADR 0012](adrs/0012-immutable-extension-page-ddl.md).
 
 ---
 
@@ -184,7 +193,7 @@ The default implementation of `EntrySearchInterface`. Executes queries directly 
 
 A single numbered instance of an Extension Table, identified by its numeric suffix (e.g., `entry_slots_page_1`). The term "page" emphasizes the **provisioning lifecycle**: pages are created by the Watcher when global slot capacity drops below the configured threshold, and `ALTER TABLE` on populated pages is strictly forbidden. Slot capacity is tracked at the page level.
 
-**See also:** Extension Table, The Watcher, Slot.
+**See also:** Extension Table, The Watcher, Slot, Spread.
 
 ---
 
@@ -240,7 +249,7 @@ An optional pre-cutover validation step during legacy data migration (gate 3 of 
 
 A typed column within an extension table (e.g., `i_str_01`, `i_int_15`, `i_num_03`, `i_dt_07`). Each slot has a fixed data type (`VARCHAR`, `BIGINT`, `DOUBLE`, or `DATETIME`) and is mapped to a specific model field via the schema registry. Slots may or may not be indexed depending on the field's `is_filterable` flag. The total number of available slots across all pages determines global capacity.
 
-**See also:** Extension Table, Page, `is_filterable`, Schema Registry.
+**See also:** Extension Table, Page, `is_filterable`, Schema Registry, Spread.
 
 ---
 
@@ -248,7 +257,7 @@ A typed column within an extension table (e.g., `i_str_01`, `i_int_15`, `i_num_0
 
 The capacity exhaustion anti-pattern where fields that are no longer filterable (or entirely deleted) continue to occupy physical column slots in extension tables. The Liberator daemon prevents this by reclaiming and nullifying these slots.
 
-**See also:** The Liberator, Slot.
+**See also:** The Liberator, Slot, Spread.
 
 ---
 
@@ -257,6 +266,15 @@ The capacity exhaustion anti-pattern where fields that are no longer filterable 
 The temporal deletion strategy used by StarDust. Entries are never physically removed via `DELETE`; instead, the `deleted_at` column on `entry_data` is set to the deletion timestamp. The composite index `(tenant_id, deleted_at, created_at)` supports efficient queries that exclude soft-deleted records.
 
 **See also:** Entry, Core Payload Table.
+
+---
+
+### Spread
+
+The number of distinct extension Pages a single Model's live filterable Slots occupy. Because the query compiler emits one `INNER JOIN entry_slots_page_X` per distinct page a filtered query references, spread is a direct constant-factor cost on filtered reads: a model whose filterable fields are scattered across three pages pays two extra index range-scans versus the same model packed onto one. Spread is an emergent consequence of Immutable Extension Page DDL ([ADR 0012](adrs/0012-immutable-extension-page-ddl.md)) combined with the global-oldest slot-reservation order — incremental field growth and relocations (retype / filterability promotion) land a model's slots on whichever page had a free slot. The advisory **Slot Spread Metric** ([ADR 0031](adrs/0031-slot-spread-metric.md)) measures it per `(tenant, model)` as **excess pages** = pages occupied − theoretical minimum (the fewest pages the model's filterable fields could occupy given per-family slot ceilings), emitting `spread_sampled` (every sample) and `high_spread_model` (when excess crosses a configurable threshold) on `source: registry`. The metric never blocks or rewrites anything; remediation is operator-initiated. Prevention is Model-Affine Slot Reservation; the cure for already-spread models is operator-initiated compaction.
+
+**Aliases:** Slot Spread, Excess Pages.
+**See also:** Page, Slot, Model, Model-Affine Slot Reservation, The Watcher, [ADR 0031](adrs/0031-slot-spread-metric.md), [ADR 0012](adrs/0012-immutable-extension-page-ddl.md).
 
 ---
 
@@ -336,7 +354,7 @@ An independent, multi-worker background PHP CLI daemon (`bin/stardust reconciler
 
 A singleton background PHP CLI daemon (`bin/stardust watcher`) responsible for monitoring global slot consumption across all extension tables and provisioning new pages when available capacity drops below the configured threshold (default: 20%). It employs advisory locking, empty-table-only DDL, and atomic registry updates to prevent metadata lock contention. The Watcher's registry update is the sole signal consumed by the Reconciler — no direct notification channel exists.
 
-**See also:** The Reconciler, Page, Advisory Lock, Schema Registry.
+**See also:** The Reconciler, Page, Advisory Lock, Schema Registry, Spread.
 
 ---
 
