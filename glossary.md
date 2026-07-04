@@ -172,12 +172,21 @@ A user-defined data structure (schema) within a tenant, identified by `model_id`
 
 ---
 
+### Model Compaction
+
+The operator-initiated operation that cures Spread: it relocates a fragmented Model's live filterable Slots onto a minimal Page set, restoring the few-joins-per-query property the Slot Spread Metric ([ADR 0031](adrs/0031-slot-spread-metric.md)) measures. Mechanically each relocation is a **same-type retype** riding the unmodified field-lifecycle pipeline ([ADR 0016](adrs/0016-field-type-change-lifecycle.md)) through the coercion matrix's identity diagonal — the only new machinery is a registry-only planner that picks target pages, a page-pinned slot reservation (pin-or-fail; compaction never defers), and a CLI (`bin/stardust compact:model`) that orchestrates relocations **sequentially by default**, so at most one field at a time has filters rejected while its new slot backfills (reads fall back to the JSON payload throughout). Crash recovery is re-run: already-relocated fields are no-ops, so the operation converges idempotently. Never scheduled, never automatic — the operator pays the relocation cost per model, exactly where the metric justifies it. Specified by [ADR 0033](adrs/0033-operator-initiated-model-compaction.md).
+
+**Aliases:** Compaction.
+**See also:** Spread, Model-Affine Slot Reservation, Page, Slot, Tombstoned Slot, [ADR 0033](adrs/0033-operator-initiated-model-compaction.md), [ADR 0031](adrs/0031-slot-spread-metric.md), [ADR 0016](adrs/0016-field-type-change-lifecycle.md).
+
+---
+
 ### Model-Affine Slot Reservation
 
 The slot-reservation policy that biases the slot reserver toward free Slots on Pages that already host a live slot of the **same Model**, falling back to the global-oldest-free order when no affine slot of the required type family exists. It is a bias, not an allocation: a model never reserves or owns whole pages, and an affine page's free slots stay available to every other model and tenant. The policy reduces Spread at its source — keeping a model's filterable slots co-located so filtered reads touch fewer pages — without sacrificing slot density, because it only reorders candidates within the existing free-slot pool and never provisions a page the Watcher would not otherwise create. Affinity is forward-only prevention: it keeps fresh and incrementally-grown models compact, but it does not converge models that are already spread (that is operator-initiated compaction) and cannot beat per-family slot ceilings. Specified by [ADR 0032](adrs/0032-model-affine-slot-reservation.md).
 
 **Aliases:** Slot Affinity.
-**See also:** Spread, Slot, Page, Index Provisioning Policy, [ADR 0032](adrs/0032-model-affine-slot-reservation.md), [ADR 0012](adrs/0012-immutable-extension-page-ddl.md).
+**See also:** Spread, Model Compaction, Slot, Page, Index Provisioning Policy, [ADR 0032](adrs/0032-model-affine-slot-reservation.md), [ADR 0012](adrs/0012-immutable-extension-page-ddl.md).
 
 ---
 
@@ -271,10 +280,10 @@ The temporal deletion strategy used by StarDust. Entries are never physically re
 
 ### Spread
 
-The number of distinct extension Pages a single Model's live filterable Slots occupy. Because the query compiler emits one `INNER JOIN entry_slots_page_X` per distinct page a filtered query references, spread is a direct constant-factor cost on filtered reads: a model whose filterable fields are scattered across three pages pays two extra index range-scans versus the same model packed onto one. Spread is an emergent consequence of Immutable Extension Page DDL ([ADR 0012](adrs/0012-immutable-extension-page-ddl.md)) combined with the global-oldest slot-reservation order — incremental field growth and relocations (retype / filterability promotion) land a model's slots on whichever page had a free slot. The advisory **Slot Spread Metric** ([ADR 0031](adrs/0031-slot-spread-metric.md)) measures it per `(tenant, model)` as **excess pages** = pages occupied − theoretical minimum (the fewest pages the model's filterable fields could occupy given per-family slot ceilings), emitting `spread_sampled` (every sample) and `high_spread_model` (when excess crosses a configurable threshold) on `source: registry`. The metric never blocks or rewrites anything; remediation is operator-initiated. Prevention is Model-Affine Slot Reservation; the cure for already-spread models is operator-initiated compaction.
+The number of distinct extension Pages a single Model's live filterable Slots occupy. Because the query compiler emits one `INNER JOIN entry_slots_page_X` per distinct page a filtered query references, spread is a direct constant-factor cost on filtered reads: a model whose filterable fields are scattered across three pages pays two extra index range-scans versus the same model packed onto one. Spread is an emergent consequence of Immutable Extension Page DDL ([ADR 0012](adrs/0012-immutable-extension-page-ddl.md)) combined with the global-oldest slot-reservation order — incremental field growth and relocations (retype / filterability promotion) land a model's slots on whichever page had a free slot. The advisory **Slot Spread Metric** ([ADR 0031](adrs/0031-slot-spread-metric.md)) measures it per `(tenant, model)` as **excess pages** = pages occupied − theoretical minimum (the fewest pages the model's filterable fields could occupy given per-family slot ceilings), emitting `spread_sampled` (every sample) and `high_spread_model` (when excess crosses a configurable threshold) on `source: registry`. The metric never blocks or rewrites anything; remediation is operator-initiated. Prevention is Model-Affine Slot Reservation; the cure for already-spread models is Model Compaction ([ADR 0033](adrs/0033-operator-initiated-model-compaction.md)).
 
 **Aliases:** Slot Spread, Excess Pages.
-**See also:** Page, Slot, Model, Model-Affine Slot Reservation, The Watcher, [ADR 0031](adrs/0031-slot-spread-metric.md), [ADR 0012](adrs/0012-immutable-extension-page-ddl.md).
+**See also:** Page, Slot, Model, Model-Affine Slot Reservation, Model Compaction, The Watcher, [ADR 0031](adrs/0031-slot-spread-metric.md), [ADR 0012](adrs/0012-immutable-extension-page-ddl.md).
 
 ---
 

@@ -22,7 +22,7 @@ The two policy edges:
 - **No signal at all** — operators discover spread only through the slow-query log or by manually inspecting `stardust_slot_assignments`. The "join cost stays bounded" promise of ADR `0001` is unverifiable in production.
 - **Automatic compaction on a timer** — a scheduled global pass that re-packs every model onto a minimal page set. This is technically possible but its cost is upside-down: relocating a field is a full re-write of that model's filterable projection (a scan of `entry_data` per relocated field plus a sweep of the old page) and a transient de-indexing window (a `backfilling` field falls back to JSON-payload reads per ADR `0013`). Running that fleet-wide on a timer subjects hot tenants to recurring mass I/O to shave a bounded constant factor off queries that were already fast. Worse, "optimal" is a moving target: co-location (few pages per model) and slot density (few pages globally) are opposed objectives — a re-packer is continuously re-solving a bin-packing tradeoff whose answer drifts with every new field.
 
-The right policy sits between, exactly as ADR `0019`'s does for cardinality: **measure spread asynchronously, surface it as a structured-log advisory event, and let operators act.** Remediation (operator-initiated per-model compaction, or model redesign) is the subject of forthcoming companion ADRs; this ADR defines only the measurement and the signal.
+The right policy sits between, exactly as ADR `0019`'s does for cardinality: **measure spread asynchronously, surface it as a structured-log advisory event, and let operators act.** Remediation (operator-initiated per-model compaction per ADR `0033`, or model redesign) is out of this ADR's scope; this ADR defines only the measurement and the signal.
 
 ## Decision
 
@@ -47,7 +47,7 @@ For a given `(tenant_id, model_id)`:
 A spread sample is taken under three conditions:
 
 1. **Periodic.** Each model is re-sampled on the Watcher's existing jittered daily cadence — the same schedule that drives ADR `0019`'s periodic cardinality sample (`$cardinalityIntervalSeconds` / `$cardinalityJitterSeconds`). Spread drifts only on registry mutation, so a daily cadence is generous; reusing the existing schedule avoids a second timer and a second stampede surface.
-2. **Post-relocation (one-shot).** Any pipeline that relocates a slot — retype (ADR `0016`), filterability promotion, or the forthcoming compaction tool — issues a one-shot spread sample for the affected `(tenant_id, model_id)` after it commits. This gives operators immediate confirmation of the spread delta a relocation caused (and, for compaction, confirmation that spread actually dropped).
+2. **Post-relocation (one-shot).** Any pipeline that relocates a slot — retype (ADR `0016`), filterability promotion, or model compaction (ADR `0033`) — issues a one-shot spread sample for the affected `(tenant_id, model_id)` after it commits. This gives operators immediate confirmation of the spread delta a relocation caused (and, for compaction, confirmation that spread actually dropped).
 3. **On demand.** An operator CLI (`bin/stardust spread:report [--tenant=N] [--model=N]`) runs the sample synchronously and prints the result, for triage outside the daily window.
 
 The pipeline does NOT sample inside the read or write path. Spread measurement is a registry-only query and never contends with consumer traffic.
@@ -110,7 +110,7 @@ Both events are structured log records on `source: registry` per ADR `0020`, con
 The pipeline emits events; it does not act. When `high_spread_model` fires, the operator's options are:
 
 - **Accept** — leave the model as-is if the extra joins are tolerable for its workload. The default for cosmetic spread.
-- **Compact** — relocate the model's filterable slots onto a minimal page set via the forthcoming operator-initiated compaction tool (a same-type retype, reusing the ADR `0016` backfill lifecycle, targeting co-located pages). This is the cure, paid per-model and on the operator's schedule — never automatically.
+- **Compact** — relocate the model's filterable slots onto a minimal page set via the operator-initiated compaction operation of ADR `0033` (a same-type retype, reusing the ADR `0016` backfill lifecycle, targeting planner-pinned pages). This is the cure, paid per-model and on the operator's schedule — never automatically.
 - **Redesign** — reduce the model's filterable-field footprint, or split a family-saturated model. An operator/data-modeling decision, out of architectural scope.
 
 The architecture deliberately does **not** auto-compact, for the same family of reasons ADR `0019` does not auto-demote: compaction is a mass-I/O migration with a transient de-indexing window (`backfilling` fields read from the JSON payload, ADR `0013`), and its cost is justified only against a specific hot model, not on a blind timer. The signal is the contribution; the remedy is the operator's call.
@@ -128,7 +128,7 @@ The architecture deliberately does **not** auto-compact, for the same family of 
 **Negative:**
 
 - The advisory is best-effort and periodic. A relocation that worsens spread between two periodic samples is invisible for up to a day unless it goes through a pipeline that fires the post-relocation one-shot. Acceptable for spread (which only changes on registry mutation, never on data ingest), less so for tight operational SLOs.
-- Spread is measured but never remediated by this ADR. The operator must possess the compaction tool (forthcoming) or accept manual remediation; until that tool ships, `high_spread_model` is actionable only by model redesign.
+- Spread is measured but never remediated by this ADR. Remediation is the compaction operation of ADR `0033`; until that ships, `high_spread_model` is actionable only by model redesign or manual relocation.
 - `theoretical_min_pages` assumes the standard per-family page layout. If a future ADR introduces heterogeneous page layouts, the min-pages formula must be revised in lockstep, or the metric will misreport excess.
 - The metric is per-tenant per-model. A model fragmented for tenant A but compact for tenant B emits independently per partition; operators must read `tenant_id` to triage — the same tenant-awareness ADR `0019` already requires.
 - Threshold tuning is deployment-specific. The conservative default (`excess_pages >= 2`) will under-report for latency-critical operators and over-report for spread-tolerant ones; the bound is explicit configuration, not a guess the pipeline makes.
@@ -137,7 +137,7 @@ The architecture deliberately does **not** auto-compact, for the same family of 
 
 - **Automatic compaction on a timer** — the policy edge this ADR explicitly rejects. A scheduled global re-pack is a recurring dataset-rewrite with a transient de-indexing window, spent to shave a bounded constant factor; and because co-location and slot density are opposed objectives, the "optimal" packing it chases drifts continuously. Maximal cost, bounded benefit, permanent operational liability.
 - **Per-query join-count logging instead of registry sampling** — the `search_request` event (Phase 8) could carry a `distinct_page_count`, giving an online spread signal. But it only sees models that are actually queried, samples them unevenly by traffic, and adds a field to the hot-path event. Registry sampling is the authoritative, complete, traffic-independent measurement; a complementary `distinct_page_count` on `search_request` is a reasonable future addition but not a substitute.
-- **Dedicated per-model pages to prevent spread structurally** — eliminating spread by giving each model its own pages collapses slot density (a 3-field model squats a 60-slot page) and explodes total page count, worsening the global side of ADR `0012`'s negative #2. Prevention belongs in a reservation *bias* (the forthcoming model-affinity ADR), not in measurement, and never as dedicated pages.
+- **Dedicated per-model pages to prevent spread structurally** — eliminating spread by giving each model its own pages collapses slot density (a 3-field model squats a 60-slot page) and explodes total page count, worsening the global side of ADR `0012`'s negative #2. Prevention belongs in a reservation *bias* (ADR `0032`), not in measurement, and never as dedicated pages.
 - **`INFORMATION_SCHEMA`-derived metrics** — spread is a registry concept (which model's slots sit on which pages), not a MySQL storage statistic. `INFORMATION_SCHEMA` has no notion of it; the registry is the only source.
 - **A single absolute `pages_occupied` threshold (no theoretical minimum)** — would flag a model that genuinely needs 3 pages identically to one that wastefully occupies 3 where 1 suffices. `excess_pages` distinguishes unavoidable spread from avoidable spread; the absolute count cannot.
 
@@ -152,3 +152,5 @@ The architecture deliberately does **not** auto-compact, for the same family of 
 - ADR `0017` — Schema Registry as Coordination Contract (the tables sampled)
 - ADR `0019` — Index Cardinality Policy (the sibling advisory; shares the Watcher cadence, the `source: registry` channel, and the never-auto-remediate principle)
 - ADR `0020` — Structured Logging Mandate (the `spread_sampled` / `high_spread_model` event vocabulary)
+- ADR `0032` — Model-Affine Slot Reservation (the prevention that lowers this metric at its source)
+- ADR `0033` — Operator-Initiated Model Compaction (the cure this metric triggers and verifies)

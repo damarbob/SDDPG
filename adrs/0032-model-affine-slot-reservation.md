@@ -102,4 +102,4 @@ Affinity is **not** dedicated per-model pages. Giving each model its own pages w
 - ADR `0007` — Write Availability Over Query Completeness (why affinity must be a bias with fallback, never a hard constraint)
 - ADR `0017` — Schema Registry as Coordination Contract (the registry join that computes affinity)
 - ADR `0029` — Liberator Sweep Omits Tenant Predicate (sweep semantics are unchanged by affinity; co-location does not alter per-page reclamation)
-- A forthcoming companion ADR on operator-initiated model compaction will define the *cure* for already-spread models that affinity, being forward-only, cannot converge.
+- ADR `0033` — Operator-Initiated Model Compaction (the *cure* for already-spread models that affinity, being forward-only, cannot converge)
