@@ -88,12 +88,13 @@ graph TB
 | [`blueprints/queryfilter_wire_format.md`](blueprints/queryfilter_wire_format.md) | QueryFilter Wire Format — normative JSON encoding for consumer filter payloads: envelope, node shapes, typed values, error model, and JSON Schema sidecar. |
 | [`schemas/queryfilter.schema.json`](schemas/queryfilter.schema.json)             | JSON Schema (Draft 2020-12) for the v1 QueryFilter wire format. Normative artifact for consumer-side and CI validation.                                    |
 | [`implementation_phases.md`](implementation_phases.md)                           | Build sequencer — nine dependency-ordered phases with exit criteria, ADR coverage index, and document precedence rules.                                    |
+| [`runbooks/maintaining_low_spread.md`](runbooks/maintaining_low_spread.md)       | Ops runbook — watching the spread metric, prevention hygiene, and operator-initiated model compaction (ADRs 0031–0033).                                    |
 
 ## Planned Contents
 
 | Document / Directory               | Purpose                                                                                                                |
 | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `runbooks/` — Ops Playbook         | Operational procedures: DLQ replay, backfill pump execution, page provisioning, rollback triggers. Reduces bus factor. |
+| `runbooks/` — remaining playbooks  | Further operational procedures: DLQ replay, backfill pump execution, page provisioning, rollback triggers. Reduces bus factor. |
 | `onboarding.md` — Onboarding Guide | Step-by-step guide for a new developer to set up, understand, and contribute to StarDust.                              |
 
 > HTTP endpoint contracts, request/response wire formats, status codes, auth, tenant resolution, and tenant management are owned by the separate **StarGate** project (which depends on StarDust via Composer). They are not in scope for SDDPG.
