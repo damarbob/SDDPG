@@ -56,6 +56,15 @@ The Reconciler outcome when a JSON payload value cannot be coerced into the targ
 
 ---
 
+### Coercion Matrix
+
+The 4×4 lookup table governing how a JSON payload value converts between the four declared types (`string`, `int`, `numeric`, `datetime`) during retype backfill. Each of the twelve off-diagonal cells pins one conversion's predicate and canonical output form, inheriting the QueryFilter typed-value rules (`blueprints/queryfilter_wire_format.md` §4.5) so ingress validation and migration coercion share a single definition of each type. The **identity diagonal** (`string → string`, `int → int`, …) is a no-op pass-through — same-type retypes such as Model Compaction relocations ride it and cannot fail. Four cells are categorically rejected (`int ↔ datetime`, `numeric ↔ datetime`) because epoch interpretation is caller policy, not engine semantics; callers bridge through a `string` intermediate. An attempted-but-failed cell stores `NULL` and emits `coercion_null` (see Coercion Failure). The matrix applies only to the Reconciler retype-backfill path, never to wire-format input validation. Normative in [ADR 0024](adrs/0024-type-coercion-matrix-for-retype-backfill.md).
+
+**Aliases:** Type Coercion Matrix.
+**See also:** Coercion Failure, Model Compaction, The Reconciler, [ADR 0024](adrs/0024-type-coercion-matrix-for-retype-backfill.md), [ADR 0016](adrs/0016-field-type-change-lifecycle.md).
+
+---
+
 ### Dead Letter Queue (DLQ)
 
 A holding queue for migration event payloads that failed processing by the dual-write consumer worker. Monitored with alerting thresholds: critical alerts fire if DLQ depth exceeds 100 messages or the oldest message age exceeds 12 hours. Failed messages are replayed via `bin/stardust dlq:replay`, which re-submits using the original `entry_id` partition key to preserve causal ordering.
