@@ -158,6 +158,7 @@ erDiagram
         BIGINT last_processed_id
         ENUM status "running|paused|completed|failed"
         DATETIME updated_at
+        VARCHAR source_declared_type "nullable; retype-backfill only"
     }
 
     stardust_import_jobs {
@@ -452,6 +453,7 @@ Persistent cursor state for the **Backfill Pump** CLI (`bin/stardust backfill`),
 | `updated_at`        | `DATETIME`                                      | Timestamp of the most recent cursor commit. Drives the "stalled backfill" operator alert.                                                                                                          |
 | `completed_at`      | `DATETIME` **NULL**                             | Set when `status` enters `completed` or `failed`.                                                                                                                                                  |
 | `last_error`        | `VARCHAR(512)` **NULL**                         | Sanitized error message when `status='failed'`. Same PII hygiene as ADR [`0018`](../adrs/0018-reconciler-poison-pill-semantics.md).                                                                |
+| `source_declared_type` | `VARCHAR(16)` **NULL**                       | Retype-backfill only: the field's `declared_type` at retype initiation. The retype registry transaction overwrites `stardust_fields.declared_type` to the target type in the same transaction that inserts this row, so the source type is unrecoverable from the field row afterwards — the Reconciler reads it here to select the correct ADR [`0024`](../adrs/0024-type-coercion-matrix-for-retype-backfill.md) coercion-matrix cell. `NULL` for Backfill Pump CLI jobs (`job_name` without the `retype_field_` prefix), which have no retype semantics. |
 
 **Indexes and constraints:**
 
@@ -463,7 +465,7 @@ Persistent cursor state for the **Backfill Pump** CLI (`bin/stardust backfill`),
 > The CLI commits `last_processed_id` after each chunk. The frequency of commits (chunk size) is a CLI flag, not a table-level concern. On crash recovery, the CLI re-reads the row, resumes from `last_processed_id + 1`, and may re-process the partial chunk that was in flight at crash time — backfill operations MUST be idempotent.
 
 > [!NOTE]
-> **Retype-backfill usage.** In addition to the Backfill Pump CLI, the **Reconciler daemon** uses `backfill_checkpoints` to track per-field retype-backfill progress. When the schema-registry retype transaction commits ([ADR 0016](../adrs/0016-field-type-change-lifecycle.md) step 1), the Reconciler inserts a `backfill_checkpoints` row with `job_name = 'retype_field_{field_id}'` and performs a direct cursor scan over `entry_data` for the `(tenant_id, model_id)` partition of the retyping field, applying `JSON_EXTRACT` + type coercion per [ADR 0024](../adrs/0024-type-coercion-matrix-for-retype-backfill.md). It does **not** use `stardust_sync_queue` for this workload — that queue is reserved for capacity-exhaustion fallbacks only. The `last_processed_id` cursor advances per chunk; on daemon restart the Reconciler resumes from `last_processed_id + 1` for any `status = 'running'` retype-backfill rows. All retype-backfill writes MUST be idempotent (`INSERT … ON DUPLICATE KEY UPDATE`).
+> **Retype-backfill usage.** In addition to the Backfill Pump CLI, the **Reconciler daemon** uses `backfill_checkpoints` to track per-field retype-backfill progress. The schema-registry retype transaction ([ADR 0016](../adrs/0016-field-type-change-lifecycle.md) step 1) inserts a `backfill_checkpoints` row with `job_name = 'retype_field_{field_id}'`, snapshotting the pre-retype type into `source_declared_type` in the same transaction that overwrites `stardust_fields.declared_type`. The Reconciler then performs a direct cursor scan over `entry_data` for the `(tenant_id, model_id)` partition of the retyping field, applying `JSON_EXTRACT` + type coercion per [ADR 0024](../adrs/0024-type-coercion-matrix-for-retype-backfill.md) using the `(source_declared_type, declared_type)` pair to select the matrix cell. It does **not** use `stardust_sync_queue` for this workload — that queue is reserved for capacity-exhaustion fallbacks only. The `last_processed_id` cursor advances per chunk; on daemon restart the Reconciler resumes from `last_processed_id + 1` for any `status = 'running'` retype-backfill rows. All retype-backfill writes MUST be idempotent (`INSERT … ON DUPLICATE KEY UPDATE`).
 
 ### 5.5 `stardust_import_jobs` (Async Bulk-Ingest Job Queue)
 
