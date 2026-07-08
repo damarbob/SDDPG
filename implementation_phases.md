@@ -465,3 +465,6 @@ Every accepted ADR is referenced by at least one phase above.
 | [0028](adrs/0028-single-document-json-for-import-artifacts.md) — Single-Document JSON for Import Artifacts | 3, 5 |
 | [0029](adrs/0029-liberator-sweep-omits-tenant-predicate.md) — Liberator Sweep Omits Tenant Predicate (refines 0009) | 6a |
 | [0030](adrs/0030-string-slot-storage-type-and-index-prefix.md) — String Slot Storage Type and Index Prefix | 2, 8 |
+| [0031](adrs/0031-slot-spread-metric.md) — Slot Spread Metric | Future (unsequenced) |
+| [0032](adrs/0032-model-affine-slot-reservation.md) — Model-Affine Slot Reservation | Future (unsequenced) |
+| [0033](adrs/0033-operator-initiated-model-compaction.md) — Operator-Initiated Model Compaction | Future (unsequenced) |
