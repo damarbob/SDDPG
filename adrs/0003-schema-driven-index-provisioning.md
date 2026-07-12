@@ -11,6 +11,8 @@ StarDust supports dynamic, model-defined fields, but the system cannot safely in
 
 Index provisioning will be schema-driven and decided at model-field registration time through explicit metadata, primarily the `is_filterable` flag. When a field is marked filterable, the corresponding slot column is provisioned with a composite B-tree index that includes `tenant_id` and the slot column. When a field is not marked filterable, the slot may still exist for typed retrieval, but it is not considered valid for filtering.
 
+> **Amended 2026-07-12:** The "slot may still exist for typed retrieval" allowance above is withdrawn — non-filterable fields are JSON-only and are never assigned slots. See ADR `0034`. The core decision of this ADR (schema-driven, registration-time index provisioning via `is_filterable`) stands unchanged.
+
 This decision makes the schema registry the source of truth for queryability. Indexes are incorporated into extension page DDL when pages are provisioned rather than added opportunistically in response to live query behavior.
 
 ## Consequences

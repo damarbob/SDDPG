@@ -82,7 +82,7 @@ Two new structured-log events on `source: registry` (the ADR `0020` allowlist ga
 - Filters on the in-flight field are rejected for its backfill window, and the sequential default stretches total wall-clock time to roughly K windows for K relocated fields. Operators compacting during low-traffic hours is the expected pattern; `--parallel=N` trades availability for speed but never removes the window.
 - Double-occupancy means compaction **needs free headroom exactly when pages are fragmented**. A badly exhausted deployment may have to wait on Liberator sweeps or Watcher provisioning before a plan becomes admissible — the capacity check makes this explicit rather than discovering it mid-flight.
 - The long-lived CLI is an operational commitment (a terminal, a tmux session, a maintenance window). The crash behaviour is benign, but the operator owns the process lifetime.
-- Non-filterable slots are not relocated, so the bounded-fetch LEFT-JOIN surface they contribute is an accepted residual. This is deliberate: the probe-side INNER JOINs (unbounded-cost side) are what spread hurts and what ADR `0031` measures; the fetch side is capped at `page_size` rows per ADR `0005`.
+- Non-filterable slots are not relocated. This costs nothing: the read path never consults them (`FieldDescriptor::isIndexedNow()` requires filterability, so `BoundedFetch` never joins their pages — such fields are always served from the JSON payload per ADR `0013`), and under ADR `0034` non-filterable fields are JSON-only, making any live slot they still hold a grandfathered legacy artifact that the eviction lifecycle decays on its own. Excluding them from compaction is therefore correct by construction, not a residual trade-off.
 - An identity backfill can still surface `coercion_null` rows: a stored payload value that no longer parses under its own declared type (malformed legacy data) normalises to `NULL` in the new slot, with the standard audit event. This is visibility, not loss — the JSON payload remains authoritative (ADR `0013`) — but operators should expect nonzero `coercion_null` counts on dirty legacy models.
 
 **Rejected alternatives:**
@@ -92,7 +92,7 @@ Two new structured-log events on `source: registry` (the ADR `0020` allowlist ga
 - **A compaction daemon or persisted plan table** — a fourth daemon and new schema to solve a problem re-run-convergence already solves. The checkpoint rows *are* the durable state; adding more violates the thin-orchestration principle and ADR `0008`'s deliberate daemon census.
 - **Deferred reservations (verbatim ADR `0016` semantics)** — the work source's later retry reserves on a page the planner did not choose, silently producing a compaction that does not compact. Pin-or-fail is the only shape that preserves the operation's meaning.
 - **`ALTER TABLE`-based moves** — forbidden on populated pages by ADR `0012`; the entire lifecycle exists because of that prohibition.
-- **Including non-filterable slots** — widens the cure's scope beyond the metric that triggers it, breaking the "excess_pages → 0 verifies success" contract, for a fetch-side benefit that is bounded and small.
+- **Including non-filterable slots** — widens the cure's scope beyond the metric that triggers it, breaking the "excess_pages → 0 verifies success" contract, for zero query-side benefit: the read path never consults non-filterable slots, and ADR `0034` makes them JSON-only legacy artifacts the eviction lifecycle already decays.
 
 ## Related
 
@@ -107,3 +107,4 @@ Two new structured-log events on `source: registry` (the ADR `0020` allowlist ga
 - ADR `0007` — Write Availability Over Query Completeness (the fail-fast capacity check never squats capacity on an inadmissible plan)
 - ADR `0019` — Index Cardinality Policy (post-promotion cardinality sample fires per existing spec)
 - ADR `0020` — Structured Logging Mandate (`compaction_planned` / `compaction_complete` join the registry-source vocabulary at implementation)
+- ADR `0034` — Non-Filterable Fields Are JSON-Only (why excluding non-filterable slots from compaction costs nothing; their legacy slots decay via eviction)
