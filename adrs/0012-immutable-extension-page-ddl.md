@@ -32,6 +32,8 @@ This means the column layout and index composition of an extension page are froz
 - The number of extension pages grows monotonically. Pages are never consolidated or merged, which increases the join surface for cross-page queries over time.
 - Fields that change their `is_filterable` status frequently incur repeated eviction and re-provisioning overhead rather than a single in-place index change.
 
+> **Addendum (2026-07-08):** The consequence cluster in negatives #2 and #3 — per-model page fragmentation ("spread") from monotonic page growth and repeated eviction/re-provisioning — is now addressed by three later ADRs without altering this decision: ADR `0031` makes spread measurable (`excess_pages`, advisory-only), ADR `0032` prevents new spread at reservation time (model-affine bias), and ADR `0033` provides the operator-initiated per-model cure (compaction via same-type retype). The negatives above remain accurate as statements of this ADR's raw consequences; the mitigations are deliberately external to it.
+
 **Rejected alternatives:**
 
 - Online DDL (`ALTER TABLE ... ALGORITHM=INPLACE`) — still acquires metadata locks during the prepare and commit phases. Behavior varies across MySQL versions and storage engine configurations, making it unreliable as a general-purpose guarantee under high concurrency.
