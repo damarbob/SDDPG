@@ -5,7 +5,7 @@
 
 ## Context
 
-StarDust's extension tables (`entry_slots_page_X`) are created by the Watcher daemon when global slot capacity drops below its provisioning threshold. Each page is provisioned with a fixed set of typed slot columns and composite B-tree indexes determined at creation time by the schema registry's `is_filterable` flags.
+StarDust's extension tables (`entry_slots_page_X`) are created by the Watcher daemon when global slot capacity drops below its provisioning threshold. Each page is provisioned with a fixed set of typed slot columns and composite B-tree indexes determined at creation time by the schema registry's `is_filterable` flags: the indexed-column set reflects the **filterable fields awaiting slots at the moment the page is created** — fields left unmapped by exhaustion or waiting in deferred retype/promotion assignments (ADR `0016`) — and columns beyond that demand are provisioned unindexed. Indexes are never added to a page after this moment; that is precisely the constraint this ADR establishes.
 
 In traditional relational systems, evolving a table's schema — adding columns, changing types, or adding indexes — is accomplished via `ALTER TABLE`. On MySQL/InnoDB, `ALTER TABLE` on a populated table acquires metadata locks that block all concurrent reads and writes for the duration of the DDL operation, even when using `ALGORITHM=INPLACE`. On a hot extension table receiving concurrent ingestion and query traffic, a single `ALTER TABLE` can stall the entire tenant's throughput for seconds or minutes depending on table size.
 
@@ -15,7 +15,13 @@ The zero-dependency core (ADR `0002`) rules out external schema migration tools 
 
 `ALTER TABLE` on populated extension pages is strictly forbidden. Schema changes to the extension layer are accomplished exclusively by provisioning new extension pages. A new page is created as an empty table with the desired column layout and indexes, and new field-to-slot mappings are assigned to it. Existing populated pages are never altered.
 
-This means the column layout and index composition of an extension page are frozen at provisioning time. If a field's indexing requirements change after its slot has been populated, the change is handled through the eviction lifecycle (ADR `0009`): the old slot is tombstoned and swept, and the field is re-provisioned on a new or different page with the correct index configuration.
+This means the column layout and index composition of an extension page are frozen at provisioning time. A change in a field's requirements never touches the page itself — it is handled through the slot lifecycle, and its shape depends on the trigger (ADR `0016`, ADR `0034`):
+
+- **Type change (retype):** the old slot is tombstoned and swept (ADR `0009`), and a new slot of the target type — indexed, since only filterable fields hold slots per ADR `0034` — is reserved on an existing page and backfilled from the JSON payload. If no such free slot exists anywhere, the assignment defers until the Watcher provisions a new page carrying the needed index (ADR `0016`).
+- **Promotion (`is_filterable: false → true`):** the field previously held no slot at all (non-filterable fields are JSON-only per ADR `0034`), so promotion is a fresh indexed reservation plus backfill — no eviction is involved, beyond sweeping a grandfathered legacy slot if one exists.
+- **Demotion (`is_filterable: true → false`):** tombstone-and-done. The field becomes JSON-only (ADR `0034`); reads fall back to `JSON_EXTRACT` immediately (ADR `0013`) and nothing is re-provisioned.
+
+In every case the populated page is left untouched; only registry state and (for the first two) a fresh slot on some page change.
 
 ## Consequences
 
@@ -30,7 +36,7 @@ This means the column layout and index composition of an extension page are froz
 
 - Index composition is frozen at provisioning time. Retroactive schema changes to existing pages — such as adding an index to a slot that was originally provisioned without one — require data migration through the tombstone-sweep-reprovision cycle, not a simple `ALTER TABLE ADD INDEX`.
 - The number of extension pages grows monotonically. Pages are never consolidated or merged, which increases the join surface for cross-page queries over time.
-- Fields that change their `is_filterable` status frequently incur repeated eviction and re-provisioning overhead rather than a single in-place index change.
+- Filterability churn is paid on the promote side: each `false → true` promotion incurs a full backfill of the field's partition rather than a single in-place index change. (Demotion is nearly free — tombstone-and-done, the field becoming JSON-only per ADR `0034`.)
 
 > **Addendum (2026-07-08):** The consequence cluster in negatives #2 and #3 — per-model page fragmentation ("spread") from monotonic page growth and repeated eviction/re-provisioning — is now addressed by three later ADRs without altering this decision: ADR `0031` makes spread measurable (`excess_pages`, advisory-only), ADR `0032` prevents new spread at reservation time (model-affine bias), and ADR `0033` provides the operator-initiated per-model cure (compaction via same-type retype). The negatives above remain accurate as statements of this ADR's raw consequences; the mitigations are deliberately external to it.
 

@@ -78,7 +78,7 @@ A holding queue for migration event payloads that failed processing by the dual-
 A state indicator signaling that an entry's indexed representation in one or more extension tables is inconsistent with the current schema registry expectations. Two scenarios produce desync, both with documented resolution paths:
 
 1. **Row desync** — The extension table row is entirely missing. This occurs during an Exhaustion Fallback: the entry is written to `entry_data` only, and its `entry_id` is enqueued to `stardust_sync_queue`. The Reconciler resolves this by backfilling the missing row once capacity is restored.
-2. **Index desync** — A field's `is_filterable` flag was promoted from `false` to `true` while the field already had a populated, unindexed slot. Because `ALTER TABLE` on populated pages is forbidden ([ADR 0012](adrs/0012-immutable-extension-page-ddl.md)), the existing slot cannot acquire an index in place. Resolution: the field undergoes the **filterability-promotion lifecycle** defined in [ADR 0016](adrs/0016-field-type-change-lifecycle.md) — the unindexed slot is severed and tombstoned, a new indexed slot of the same type is assigned, and the Reconciler backfills it from the JSON payload. While the new slot is `backfilling`, reads fall back to `JSON_EXTRACT` and filters are rejected (the field is unmapped per the Schema Registry contract in [ADR 0017](adrs/0017-schema-registry-as-coordination-contract.md)). Once promoted to `ready`, indexed filtering resumes.
+2. **Index desync** — A field's `is_filterable` flag was promoted from `false` to `true`. Under ADR `0034` a non-filterable field is JSON-only and holds no slot, so promotion is normally a fresh indexed-slot reservation plus a backfill from the JSON payload — no eviction. (The legacy variant, where the field already had a populated, unindexed slot from before ADR `0034`, additionally severs and tombstones that grandfathered slot; because `ALTER TABLE` on populated pages is forbidden per [ADR 0012](adrs/0012-immutable-extension-page-ddl.md), the old slot cannot acquire an index in place.) Either way the field undergoes the **filterability-promotion lifecycle** defined in [ADR 0016](adrs/0016-field-type-change-lifecycle.md): a new indexed slot of the field's type is assigned `free → backfilling`, and the Reconciler backfills it from the JSON payload. While the new slot is `backfilling`, reads fall back to `JSON_EXTRACT` and filters are rejected (the field is unmapped per the Schema Registry contract in [ADR 0017](adrs/0017-schema-registry-as-coordination-contract.md)). Once promoted to `ready`, indexed filtering resumes.
 
 **See also:** Exhaustion Fallback, The Reconciler, `is_filterable`, Page, [ADR 0016](adrs/0016-field-type-change-lifecycle.md), [ADR 0017](adrs/0017-schema-registry-as-coordination-contract.md).
 
@@ -159,7 +159,7 @@ Two decoupled feature flags used during legacy data migration. The **Read Featur
 
 ### `is_filterable`
 
-A boolean metadata flag in the schema registry, set at model-field registration time. When `true`, a composite B-tree index `(tenant_id, slot_column)` is included in the extension table DDL at page provisioning time. When `false`, the slot is used for discrete retrieval only — any function-API attempt to filter on that field is rejected with a typed exception before the database is touched.
+A boolean metadata flag in the schema registry, set at model-field registration time. When `true`, the field is assigned an extension-table slot whose composite B-tree index `(tenant_id, slot_column)` is included in the page DDL at provisioning time. When `false`, the field is **JSON-only** — it is never assigned a slot (ADR `0034`), lives solely in `entry_data.fields`, is retrieved via `JSON_EXTRACT` on select, and any function-API attempt to filter on it is rejected with a typed exception before the database is touched.
 
 **See also:** Slot, Index Provisioning Policy, Pre-Flight Rejection.
 
@@ -265,7 +265,7 @@ An optional pre-cutover validation step during legacy data migration (gate 3 of 
 
 ### Slot
 
-A typed column within an extension table (e.g., `i_str_01`, `i_int_15`, `i_num_03`, `i_dt_07`). Each slot has a fixed data type (`VARCHAR`, `BIGINT`, `DOUBLE`, or `DATETIME`) and is mapped to a specific model field via the schema registry. Slots may or may not be indexed depending on the field's `is_filterable` flag. The total number of available slots across all pages determines global capacity.
+A typed column within an extension table (e.g., `i_str_01`, `i_int_15`, `i_num_03`, `i_dt_07`). Each slot has a fixed data type (`TEXT` for string slots per ADR `0030`, or `BIGINT`, `DOUBLE`, `DATETIME`) and, when occupied, is mapped to a specific **filterable** model field via the schema registry — non-filterable fields are JSON-only and never occupy a slot (ADR `0034`). A page may still carry unindexed columns beyond current filterable demand; these are unassignable inventory, not slots held by non-filterable fields. The total number of available slots across all pages determines global capacity.
 
 **See also:** Extension Table, Page, `is_filterable`, Schema Registry, Spread.
 

@@ -94,7 +94,7 @@ An independent background daemon responsible exclusively for sweeping "dead" slo
 
 #### 2.1.5 Slot Assignment Lifecycle
 
-When a new model field is registered in the schema registry, the system assigns it a physical slot column in two steps:
+When a new **filterable** model field is registered in the schema registry, the system assigns it a physical slot column in two steps (non-filterable fields are JSON-only and skip this lifecycle entirely — ADR `0034`):
 
 1. **Type resolution**: The field's declared type (`string`, `int`, `numeric`, `datetime`) maps to the corresponding column family (`i_str_XX`, `i_int_XX`, `i_num_XX`, `i_dt_XX`).
 2. **Slot reservation**: The registry scans existing extension pages for a free slot of the matching type. The first available slot is atomically reserved in the registry and marked `assigned` to the field. No DDL is executed — slot reservation is a pure registry write. If no free slot of the required type exists on any provisioned page, the field is left unmapped until the Watcher provisions a new page and the reservation is retried.
@@ -117,7 +117,7 @@ When a model field's declared type is changed (e.g., `string → int`), its exis
 Indexing decisions are **schema-driven**, governed by the `is_filterable` metadata flag set at model-field registration time.
 
 - If `is_filterable = true` → a composite B-tree index `(tenant_id, slot_column)` is included in the page DDL at provisioning time.
-- If `is_filterable = false` → the slot is used for discrete retrieval only. **Filters against non-filterable fields are strictly forbidden.** To maintain low latency, MySQL will never evaluate `JSON_EXTRACT` inside a `WHERE` clause. If a caller attempts to filter on an unindexed field, the function API rejects the call with a typed exception. No fallback or suggestions for in-memory bulk filtering will be provided, forcing the caller to request proper schema provisioning if the filter is a genuine business requirement.
+- If `is_filterable = false` → the field is **JSON-only** and is never assigned an extension-table slot (ADR `0034`); it lives solely in `entry_data.fields` and is retrieved via `JSON_EXTRACT` on select. **Filters against non-filterable fields are strictly forbidden.** To maintain low latency, MySQL will never evaluate `JSON_EXTRACT` inside a `WHERE` clause. If a caller attempts to filter on a non-filterable field, the function API rejects the call with a typed exception. No fallback or suggestions for in-memory bulk filtering will be provided, forcing the caller to request proper schema provisioning if the filter is a genuine business requirement.
 - This ensures index provisioning is a deterministic, auditable decision tied to the schema registry.
 
 ### 2.3 Schema Registry (Field-to-Slot Mapping)

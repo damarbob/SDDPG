@@ -12,7 +12,8 @@ The Architecture Blueprint (§2.1) describes two independent background daemons 
 
 - **The Watcher**: A singleton PHP CLI daemon (`bin/stardust watcher`) that:
   - Polls global slot consumption across all `entry_slots_page_X` tables on a configurable interval.
-  - Provisions a new extension page when available capacity drops below the configured threshold (default: 20%).
+  - Provisions a new extension page when available **usable** capacity drops below the configured threshold (default: 20%) — free slots that cannot satisfy any pending demand shape (e.g. unindexed free slots when every waiting filterable field requires an index) do not count toward the threshold.
+  - Derives the new page's indexed-column set from registry demand at provisioning time — the filterable fields currently unmapped (exhaustion fallback) or waiting in deferred retype/promotion assignments ([ADR 0016](../adrs/0016-field-type-change-lifecycle.md), [ADR 0034](../adrs/0034-non-filterable-fields-are-json-only.md)) — so a deferred `requireIndexed` reservation is always eventually satisfiable.
   - Uses advisory locking (`GET_LOCK`) and empty-table-only DDL to avoid metadata lock contention.
   - Atomically updates the schema registry on successful provisioning.
 - **The Reconciler**: A multi-worker PHP CLI daemon (`bin/stardust reconciler`) that:
@@ -34,12 +35,12 @@ The Architecture Blueprint (§2.1) describes two independent background daemons 
 
 ### Watcher
 
-1. When global slot capacity drops below the configured threshold, the Watcher provisions exactly one new `entry_slots_page_X` table whose schema matches the canonical extension table DDL.
+1. When usable slot capacity drops below the configured threshold, the Watcher provisions exactly one new `entry_slots_page_X` table whose column layout matches the canonical extension table DDL and whose composite indexes cover the slot columns derived from current registry demand (filterable fields unmapped or awaiting deferred retype/promotion assignment). A page provisioned while a filterable field is waiting on an indexed slot of a given type family must carry an index on at least one free column of that family, so the pending reservation can be satisfied on the next Reconciler tick. "Usable" capacity excludes free slots that cannot satisfy any pending demand shape: when every waiting field requires an indexed slot, unindexed free slots do not count toward the threshold, so a page full of unindexed free columns never masks a real shortage of indexed capacity. Additionally, the threshold comparison is not the only trigger: **any pending reservation that no existing free slot can satisfy triggers provisioning unconditionally**, regardless of the global usable ratio — otherwise satisfiable demand of one type family could dilute the ratio above threshold and starve a single unsatisfiable waiter of another family indefinitely (starvation-freedom guarantee).
 2. Provisioning acquires an advisory lock (`GET_LOCK('stardust_page_provision', 10)`) and releases it upon completion or failure.
 3. `ALTER TABLE` is never executed against a populated page.
 4. The schema registry is atomically updated to reflect the new page. The ingestion path picks it up on its next schema cache refresh without requiring a restart.
 5. If a second Watcher instance attempts to start, it fails fast with a clear error (PID file or lock contention).
-6. Each poll cycle logs: timestamp, pages inspected, global capacity percentage, action taken (provisioned / no action).
+6. Each poll cycle logs: timestamp, pages inspected, usable capacity percentage, action taken (provisioned / no action), and — when a page is provisioned — the indexed slot columns emitted for it and the pending demand that drove them.
 
 ### Reconciler
 

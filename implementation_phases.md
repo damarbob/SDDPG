@@ -146,7 +146,7 @@ Full column definitions, index specifications, and atomicity invariants for all 
 **Deliverables:**
 
 - **Page provisioner:** creates `entry_slots_page_1` (and subsequent pages) using Empty-Table-Only DDL; inserts the `stardust_pages` row and all `stardust_slot_assignments` rows (`status='free'`) in one atomic transaction after the DDL auto-commits.
-- **Index Provisioning Policy:** at page DDL time, a composite B-tree index `(tenant_id, slot_column)` is emitted for every slot whose model field has `is_filterable = true`; slots with `is_filterable = false` receive no index.
+- **Index Provisioning Policy:** at page DDL time, a composite B-tree index `(tenant_id, slot_column)` is emitted for each slot column named in the provisioner's filterable-column set (the filterable fields awaiting slots); all other columns on the page are created unindexed. Non-filterable fields are JSON-only and never occupy a slot ([ADR 0034](adrs/0034-non-filterable-fields-are-json-only.md)).
 - **Slot reservation:** scanning the registry for a free slot of the required type and atomically transitioning it `free → assigned` (`field_id` set) — a pure registry write, no DDL.
 
 **References:**
@@ -162,7 +162,7 @@ Full column definitions, index specifications, and atomicity invariants for all 
 
 **Exit criteria:**
 
-- [ ] Provisioning a new page with a mix of `is_filterable = true` and `is_filterable = false` fields produces composite indexes only on the filterable slots (verified via `SHOW INDEX FROM entry_slots_page_1`).
+- [ ] Provisioning a new page with a set of filterable slot columns produces composite indexes on exactly those columns and no others; columns beyond the requested filterable set are created unindexed (verified via `SHOW INDEX FROM entry_slots_page_1`). Non-filterable fields are JSON-only and never contribute a slot ([ADR 0034](adrs/0034-non-filterable-fields-are-json-only.md)).
 - [ ] Attempting `ALTER TABLE entry_slots_page_1 ADD COLUMN …` on a page that contains any rows is rejected by the engine guard (not by MySQL; the guard must fire first).
 - [ ] Slot reservation for a field transitions exactly one `stardust_slot_assignments` row from `free` to `assigned`; the row's `field_id` is set; no other rows are mutated.
 - [ ] The `stardust_pages` row and all slot inventory rows for a newly provisioned page are present or absent together — no partial inventory state after a simulated mid-transaction crash (verify via rollback test).
@@ -325,7 +325,7 @@ Full column definitions, index specifications, and atomicity invariants for all 
 
 **Deliverables:**
 
-- **Field retype & filterability-promotion pipeline:** implements the `retype → tombstone → assign → backfill → promote` lifecycle per [Architecture Blueprint §2.1.6](architecture_blueprint.md) and [ADR 0016](adrs/0016-field-type-change-lifecycle.md) for two triggers: (1) a `declared_type` change, and (2) an `is_filterable: false → true` promotion on a field that already has data on an unindexed slot. Both triggers use the same atomic registry transaction (tombstone old slot, transition new slot `free → backfilling`) and the same Reconciler-driven backfill (cursor scan over `entry_data` for the `(tenant_id, model_id)` partition, progress tracked in a `backfill_checkpoints` row keyed `retype_field_{field_id}`; see [schema_reference.md §5.4](schemas/schema_reference.md)); slot advances `backfilling → ready` once all rows in the partition are processed.
+- **Field retype & filterability-promotion pipeline:** implements the `retype → tombstone → assign → backfill → promote` lifecycle per [Architecture Blueprint §2.1.6](architecture_blueprint.md) and [ADR 0016](adrs/0016-field-type-change-lifecycle.md) for two triggers: (1) a `declared_type` change, and (2) an `is_filterable: false → true` promotion. Because non-filterable fields are JSON-only and hold no slot ([ADR 0034](adrs/0034-non-filterable-fields-are-json-only.md)), a promotion normally reserves a fresh indexed slot (`free → backfilling`) with no old slot to tombstone; a `declared_type` change tombstones the existing live slot and reserves the new one. (A promotion of a field carrying a grandfathered pre-`0034` unindexed slot additionally tombstones that legacy slot.) Both triggers use the same atomic registry transaction and the same Reconciler-driven backfill (cursor scan over `entry_data` for the `(tenant_id, model_id)` partition, progress tracked in a `backfill_checkpoints` row keyed `retype_field_{field_id}`; see [schema_reference.md §5.4](schemas/schema_reference.md)); slot advances `backfilling → ready` once all rows in the partition are processed.
 - **Type coercion matrix:** applied during Reconciler backfill for type-change retypes; values that cannot be coerced store `NULL` in the new slot and emit a `coercion_null` structured-log event. Categorical rejections (numeric ↔ datetime) are enforced at registry-write time. No coercion applies to filterability-promotion (the value is already the correct type). See [ADR 0024](adrs/0024-type-coercion-matrix-for-retype-backfill.md).
 - **Cardinality post-backfill sample:** after any slot advances to `ready`, trigger the one-shot cardinality sample per [ADR 0019](adrs/0019-index-cardinality-policy.md), emitting a `cardinality_sampled` structured-log event.
 
@@ -346,7 +346,7 @@ Full column definitions, index specifications, and atomicity invariants for all 
 - [ ] Once the Reconciler completes backfill for all rows in the partition, the slot advances to `ready`; if `is_filterable = true`, filter queries against the field succeed using the new slot's index.
 - [ ] Killing the Reconciler mid-retype-backfill and restarting it causes it to resume from `last_processed_id + 1` in `backfill_checkpoints`; no entry's new slot receives a double-write and no entry is left unprocessed after the run completes.
 - [ ] The atomic retype registry transaction (declared_type update + old-slot tombstone + new-slot `free → backfilling`) also increments `stardust_schema_version.version` in the same transaction as the three registry writes.
-- [ ] Promoting a field from `is_filterable = false` to `is_filterable = true` on a field that already has data on its current unindexed slot triggers the full pipeline: the existing slot is tombstoned, a new indexed slot is provisioned `free → backfilling`, the Reconciler backfills all existing entries into the new slot, and once the slot advances to `ready` the `(tenant_id, slot_column)` composite index is used for filter queries against that field.
+- [ ] Promoting a field from `is_filterable = false` to `is_filterable = true` triggers the full pipeline: since the field was JSON-only and held no slot ([ADR 0034](adrs/0034-non-filterable-fields-are-json-only.md)), a new indexed slot is reserved `free → backfilling`, the Reconciler backfills all existing entries into it from the JSON payload, and once the slot advances to `ready` the `(tenant_id, slot_column)` composite index is used for filter queries against that field. (A field still carrying a grandfathered pre-`0034` unindexed slot has that legacy slot tombstoned as part of the same transaction.)
 
 ---
 

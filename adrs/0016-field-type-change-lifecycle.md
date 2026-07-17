@@ -21,6 +21,8 @@ A field type change — and, by the identical mechanic, an `is_filterable: false
 
 **New page provisioning is not part of the type change or filterability promotion operation.** If no free slot of the target shape (correct type, indexed if needed) exists on any existing page, the field waits in `JSON_EXTRACT` fallback until the Watcher independently detects low capacity and provisions a new page. Neither trigger executes DDL synchronously.
 
+> **Clarified 2026-07-13:** Two readings of the deferred wait are pinned so it provably terminates. (1) When the Watcher provisions, the new page's indexed-column set is derived from the registry's pending demand — the filterable fields currently unmapped or waiting in deferred retype/promotion assignments — per Architecture Blueprint §2.2's provisioning-time indexing and ADR `0012`; a page born without the awaited index cannot satisfy this wait. (2) "Low capacity" means low **usable** capacity: free slots that cannot satisfy any pending demand shape (e.g. unindexed free slots when every waiting field requires an index — the norm under ADR `0034`, since only filterable fields hold slots) do not count toward the provisioning threshold; moreover, a pending reservation that **no** existing free slot can satisfy constitutes low usable capacity by definition and triggers provisioning regardless of the global ratio, so a deferred wait can never be starved by satisfiable demand of other type families diluting the metric. Additionally, ADR `0034` narrows the promotion trigger described above: a promoted field normally holds no slot at all (non-filterable fields are JSON-only), so "already has data on its current (unindexed) slot" describes only grandfathered legacy slots.
+
 ## Consequences
 
 **Positive:**
