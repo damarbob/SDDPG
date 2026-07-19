@@ -1,6 +1,6 @@
 # 0034 - Non-Filterable Fields Are JSON-Only (No Slot Residency)
 
-**Status:** Proposed
+**Status:** Accepted
 **Created:** 2026-07-12
 
 ## Context
