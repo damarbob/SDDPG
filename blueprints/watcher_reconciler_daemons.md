@@ -1,6 +1,6 @@
 # Blueprint: Watcher & Reconciler Daemons
 
-> **Status:** Draft
+> **Status:** Accepted
 > **Author:** Damar Syah Maulana
 > **Created:** 2026-04-09
 
