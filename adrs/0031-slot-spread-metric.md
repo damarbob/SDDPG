@@ -60,7 +60,7 @@ Spread is computed entirely from the registry — it never touches `entry_data` 
 SELECT
   f.model_id                         AS model_id,
   COUNT(DISTINCT sa.page_id)         AS pages_occupied,
-  COUNT(*)                           AS filterable_slot_count,
+  COUNT(*)                           AS live_slot_count,
   sa.slot_column                                                  -- for the per-family breakdown
 FROM stardust_slot_assignments sa
 JOIN stardust_fields f ON f.id = sa.field_id
@@ -71,6 +71,8 @@ GROUP BY f.model_id;
 ```
 
 The per-family counts needed for `theoretical_min_pages` are derived from the `slot_column` prefix (`i_str_`, `i_int_`, `i_num_`, `i_dt_`) in application code — no second query. The whole sample is bounded by the count of a tenant's live filterable slots, which is small (tens to low hundreds), and uses the registry's existing indexes.
+
+The measured population is **live query-servicing slots**, which is why the emitted field is `live_slot_count`. The discriminator that narrows it is the `status IN ('assigned', 'ready')` predicate — a `backfilling` slot belongs to a filterable field but serves no query, so it contributes no join cost and must not be counted. The `f.is_filterable = 1` predicate is *not* a second discriminator under ADR `0034`, which makes non-filterable fields JSON-only and never slot-resident; it is retained as a defensive guard until that ADR's reservation guards ship in code, after which it becomes a redundant no-op that is safe to keep or drop. Do not name this field `filterable_slot_count` — the adjective that distinguishes it is liveness, not filterability.
 
 ### Threshold and Event Emission
 
@@ -96,7 +98,7 @@ Both events are structured log records on `source: registry` per ADR `0020`, con
 | `pages_occupied`        | integer | Distinct pages the model's live filterable slots occupy.              |
 | `theoretical_min_pages` | integer | Fewest pages the filterable fields could occupy (family-constrained). |
 | `excess_pages`          | integer | `pages_occupied - theoretical_min_pages`.                             |
-| `filterable_slot_count` | integer | Live filterable slots counted for this model.                         |
+| `live_slot_count`       | integer | Live query-servicing slots (`assigned`/`ready`) counted for this model. |
 | `trigger`               | string  | `periodic`, `post_relocation`, or `on_demand`.                        |
 
 `high_spread_model` carries the same fields plus:

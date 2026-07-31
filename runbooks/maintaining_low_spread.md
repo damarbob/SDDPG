@@ -47,6 +47,7 @@ Key fields:
 | `pages_occupied` | Distinct pages holding the model's live filterable slots |
 | `theoretical_min_pages` | Fewest pages the model's filterable fields could occupy, given family ceilings |
 | `excess_pages` | `pages_occupied − theoretical_min_pages` — **the count of avoidable joins**; `0` is optimal packing |
+| `live_slot_count` | Live query-servicing slots (`assigned`/`ready`) behind the sample; `backfilling` and `tombstoned` slots are excluded because they serve no query |
 | `trigger` | `periodic`, `post_relocation`, or `on_demand` |
 
 Read `excess_pages`, not `pages_occupied`: a model that genuinely needs three pages (family-ceiling-bound) reports `excess_pages = 0` and needs nothing from you.
@@ -63,7 +64,7 @@ The metric is registry-only, so you can measure spread right now with one query 
 SELECT
   f.model_id,
   COUNT(DISTINCT sa.page_id) AS pages_occupied,
-  COUNT(*)                   AS filterable_slot_count,
+  COUNT(*)                   AS live_slot_count,
   SUM(sa.slot_column LIKE 'i_str\_%') AS str_slots,
   SUM(sa.slot_column LIKE 'i_int\_%') AS int_slots,
   SUM(sa.slot_column LIKE 'i_num\_%') AS num_slots,
