@@ -1,6 +1,6 @@
 # 0031 - Slot Spread Metric: Advisory Page-Fragmentation Signal
 
-**Status:** Proposed
+**Status:** Accepted
 **Created:** 2026-06-27
 
 ## Context
