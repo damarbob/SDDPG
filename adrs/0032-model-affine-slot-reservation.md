@@ -1,6 +1,6 @@
 # 0032 - Model-Affine Slot Reservation
 
-**Status:** Proposed
+**Status:** Accepted
 **Created:** 2026-06-27
 
 ## Context
