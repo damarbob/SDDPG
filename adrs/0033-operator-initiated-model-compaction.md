@@ -1,6 +1,6 @@
 # 0033 - Operator-Initiated Model Compaction
 
-**Status:** Proposed
+**Status:** Accepted
 **Created:** 2026-07-04
 
 ## Context
