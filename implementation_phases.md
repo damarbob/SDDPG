@@ -468,3 +468,5 @@ Every accepted ADR is referenced by at least one phase above.
 | [0031](adrs/0031-slot-spread-metric.md) — Slot Spread Metric | Future (unsequenced) |
 | [0032](adrs/0032-model-affine-slot-reservation.md) — Model-Affine Slot Reservation | Future (unsequenced) |
 | [0033](adrs/0033-operator-initiated-model-compaction.md) — Operator-Initiated Model Compaction | Future (unsequenced) |
+| [0034](adrs/0034-non-filterable-fields-are-json-only.md) — Non-Filterable Fields Are JSON-Only | 2, 3, 6b |
+| [0035](adrs/0035-usable-capacity-is-a-satisfiability-test.md) — Usable Capacity Is a Satisfiability Test (refines 0016) | 5 |
