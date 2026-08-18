@@ -72,6 +72,27 @@ GROUP BY f.model_id;
 
 The per-family counts needed for `theoretical_min_pages` are derived from the `slot_column` prefix (`i_str_`, `i_int_`, `i_num_`, `i_dt_`) in application code — no second query. The whole sample is bounded by the count of a tenant's live filterable slots, which is small (tens to low hundreds), and uses the registry's existing indexes.
 
+> **Corrected 2026-08-17:** the query above **does not run as written**, and the corrected form is below. It filters `WHERE sa.tenant_id = :tenant_id`, but `stardust_slot_assignments` has **no `tenant_id` column** — its columns are `id, page_id, slot_column, slot_type, field_id, status, sweep_cursor_id, tombstoned_at, updated_at, sweep_gap_count`. Tenancy reaches a slot only through `field_id → stardust_fields.model_id → stardust_models.tenant_id`. Executed as published it fails with `ERROR 1054 Unknown column 'sa.tenant_id' in 'where clause'`. The runbook [`maintaining_low_spread.md`](../runbooks/maintaining_low_spread.md) §3.3 already carried the correct join; the two documents disagreed and the runbook was right. **The decision, definitions, triggers, thresholds and event schema above are all unaffected** — only the illustrative SQL was wrong.
+>
+> ```sql
+> SELECT
+>   m.tenant_id    AS tenant_id,
+>   f.model_id     AS model_id,
+>   sa.page_id     AS page_id,      -- COUNT(DISTINCT …) => pages_occupied
+>   sa.slot_column AS slot_column   -- prefix => per-family breakdown
+> FROM stardust_slot_assignments sa
+> JOIN stardust_fields f ON f.id = sa.field_id
+> JOIN stardust_models m ON m.id = f.model_id
+> WHERE sa.status IN ('assigned', 'ready')
+>   AND f.is_filterable = 1
+>   AND m.tenant_id = :tenant_id    -- optional
+>   AND f.model_id  = :model_id;    -- optional
+> ```
+>
+> Both `WHERE` predicates are optional: the periodic trigger omits them and groups the whole result by `(tenant_id, model_id)` in one pass, while the post-relocation and on-demand triggers supply one or both to scope the sample.
+>
+> Two further corrections folded in. The published query **pre-aggregates**, mixing `COUNT(DISTINCT sa.page_id)` and `COUNT(*)` with a bare `sa.slot_column` under `GROUP BY f.model_id` — which yields one arbitrary `slot_column` per group and therefore cannot supply the per-family counts the very next paragraph says are "derived from the `slot_column` prefix in application code". Returning raw rows and folding them in application code is what actually satisfies that sentence. And selecting `m.tenant_id` is what lets the periodic all-tenant sweep avoid a per-tenant loop.
+
 The measured population is **live query-servicing slots**, which is why the emitted field is `live_slot_count`. The discriminator that narrows it is the `status IN ('assigned', 'ready')` predicate — a `backfilling` slot belongs to a filterable field but serves no query, so it contributes no join cost and must not be counted. The `f.is_filterable = 1` predicate is *not* a second discriminator under ADR `0034`, which makes non-filterable fields JSON-only and never slot-resident; it is retained as a defensive guard until that ADR's reservation guards ship in code, after which it becomes a redundant no-op that is safe to keep or drop. Do not name this field `filterable_slot_count` — the adjective that distinguishes it is liveness, not filterability.
 
 ### Threshold and Event Emission

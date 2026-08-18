@@ -47,7 +47,7 @@ Each source declares a closed list of event names in its feature blueprint. Exam
 - `chronicler`: `job_claimed`, `job_complete`, `job_failed`, `low_disk`, `artifact_oversized`, `gc_swept`.
 - `api`: `request`, `pre_flight_rejected`, `bulk_accepted`, `payload_too_large`, `cache_miss` (Phase 4 schema-version cache refresh, per ADR `0015`; shares the name with the reconciler-source event below — the `source` field disambiguates).
 - `export_api`: `export_accepted` (Phase 7 — emitted by the engine-side export submission entry point after the per-tenant active-job cap check + INSERT commits; mirrors the `bulk_api`/`bulk_accepted` pattern for symmetric observability of the two submission surfaces).
-- `registry`: `version_bump`, `low_cardinality_index`, `cardinality_sampled`, `page_provisioned`, `slot_reserved`, `retype_started`, `promote_to_ready`.
+- `registry`: `version_bump`, `low_cardinality_index`, `cardinality_sampled`, `spread_sampled`, `high_spread_model`, `page_provisioned`, `slot_reserved`, `retype_started`, `promote_to_ready`.
 
 Adding a new event name requires a blueprint update. Free-form `printf`-style log lines are not permitted.
 

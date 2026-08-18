@@ -21,6 +21,15 @@ The missing slot assignment is recorded in the backfill queue. The Reconciler da
 
 During the backfill window, the affected field is still retrievable via `JSON_EXTRACT(fields, '$.fieldName')` from the core payload. This is safe because `entry_data.fields` always holds the complete entry payload; extension table slots are materializations of that payload, not independent stores, so a missing slot never implies missing data. The field is not available as an indexed filter until backfill completes. Once the Reconciler finishes, full indexed queryability is restored without any re-ingestion of source data.
 
+> **Clarified 2026-08-17:** the backfill window has **two sub-phases**, and the two Negative consequences below describe one each rather than contradicting one another.
+>
+> 1. **Before a slot is reserved.** The field has no live slot at all, so it is not a valid filter target: the read path's pre-flight rejects a filter on it (ADR `0004` fail-fast), and retrieval is `JSON_EXTRACT` only. This is Negative #1's "affected fields cannot be used as indexed filters".
+> 2. **After a slot is reserved, before the queue drains.** The field is filterable, but only the entries already backfilled carry a slot value, so filtered result sets are incomplete. This is Negative #2's "consumers may observe incomplete filter results".
+>
+> **Reservation is the Reconciler's responsibility, not the write path's.** "Once a free slot becomes available" above is satisfied by the Reconciler *claiming* one when it finds a registered filterable field still unmapped — not by some other component having assigned it first. Nothing else does, and until this was implemented the queue row simply waited forever. The slot it claims must be an *indexed* one, or sub-phase 2 would make the field a filter target backed by an unindexed column, violating ADR `0004`.
+>
+> Sub-phase 2's duration is bounded by backfill-queue depth, which the Consequences below already name as the leading indicator to monitor. Suppressing sub-phase 2 entirely — holding filterability until the whole queue drains, as ADR `0016` does for retypes — is deliberately **not** the rule here: a retype is operator-initiated and can afford to wait, whereas exhaustion is a degradation the system is racing to exit, and ADR `0016`'s scope is a type change or an `is_filterable: false → true` promotion, neither of which this is.
+
 ## Consequences
 
 **Positive:**
