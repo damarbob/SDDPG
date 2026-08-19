@@ -64,6 +64,22 @@ The candidate `SELECT` runs `FOR UPDATE`. The affinity computation **must not** 
 
 The implementation therefore resolves the affine page-set in a **prior, non-locking read** (e.g. a plain `SELECT DISTINCT page_id` of the model's live slots, or a derived set the planner joins without locking), and only the final free-slot selection takes `FOR UPDATE`, scoped to free rows. The exact SQL shape is an implementation concern; this ADR fixes the policy and the non-locking invariant.
 
+> **Corrected 2026-08-18:** two notes from implementing this.
+>
+> **(1) The entry points named above have changed.** They are now `reserve()`, `reserveForExhaustionBackfill()` and `reserveForBackfillWithinTransaction()`; `reserveForBackfill()` was deleted unused when the ADR `0007` exhaustion path shipped. The structural claim is unaffected — all three still funnel through the single private chokepoint, and affinity was indeed one method's change.
+>
+> **(2) The conceptual `ORDER BY` above must not be implemented literally.** Expressing affinity as an ordering key — `ORDER BY (a.page_id IN (…)) DESC, a.page_id, a.id LIMIT 1 FOR UPDATE` — is a **serious concurrency regression**, measured on MySQL 8.0.13:
+>
+> | candidate shape | plan | free rows locked |
+> | :-------------- | :--- | :--------------- |
+> | global-oldest (pre-affinity) | `type=index`, no filesort | 1 of 15 |
+> | `ORDER BY (page_id IN …) DESC` | `type=ref`, **filesort** | **all of them** |
+> | affine-scoped `WHERE` + `FORCE INDEX (ix_slot_assignments_page_status)` | `type=range`, no filesort | 1 of 15 |
+>
+> The ordering expression cannot be satisfied from an index, so the optimiser abandons the index-ordered `LIMIT 1` walk and filesorts the family's entire free pool — and `FOR UPDATE` locks every row the scan examines. Two reservers for unrelated models of the same family would then serialise completely. This is a *different* hazard from the one forbidden above (which concerns the model's **live** slots) and is not otherwise implied by this ADR, hence recording it here.
+>
+> The shape satisfying both the policy and the lock budget is **two queries**: an affine-scoped candidate (`… AND a.page_id IN (…)`, with the index forced — without the hint the optimiser picks `index_merge … Using intersect(…)` and the footprint expands again) followed, only on a miss, by the unchanged global-oldest query. Both stay index-ordered and each locks ~1 row, matching pre-affinity behaviour exactly.
+
 ### What this is explicitly not
 
 Affinity is **not** dedicated per-model pages. Giving each model its own pages would let a three-field model squat a sixty-slot page, collapsing density and growing total page count — worsening ADR `0012` negative #2 on the global axis to fix it on the per-query axis. Affinity is the midpoint of the co-location/density line, deliberately nudged toward co-location because spread is the named cost; it buys that nudge only by reordering within the *existing* free-slot pool, never by holding capacity.
