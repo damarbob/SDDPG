@@ -1,7 +1,7 @@
 # Runbook — Maintaining Low Spread
 
 > **Audience:** operators of a running StarDust deployment.
-> **Status:** written ahead of implementation. The spread metric, model-affine reservation, and model compaction are specified by [ADR 0031](../adrs/0031-slot-spread-metric.md), [ADR 0032](../adrs/0032-model-affine-slot-reservation.md), and [ADR 0033](../adrs/0033-operator-initiated-model-compaction.md) (all **Proposed**); the CLI commands and events below land with their implementation phase. The [manual measurement SQL](#33-manual-measurement-today) works against the current schema today.
+> **Status:** implemented as of 2026-08-19. The spread metric ([ADR 0031](../adrs/0031-slot-spread-metric.md)), model-affine reservation ([ADR 0032](../adrs/0032-model-affine-slot-reservation.md)) and model compaction ([ADR 0033](../adrs/0033-operator-initiated-model-compaction.md)) have all shipped, and all three ADRs are **Accepted**. Every command and event below works today, with one exception called out in §6.2: **`--parallel=N` is not implemented.** The [manual measurement SQL](#33-manual-measurement-today) remains valid.
 > On any conflict between this runbook and an ADR, **the ADR governs**.
 
 ---
@@ -118,7 +118,11 @@ Affinity ([ADR 0032](../adrs/0032-model-affine-slot-reservation.md)) is automati
 bin/stardust compact:model --tenant=N --model=N
 ```
 
-Sequential by default: the CLI initiates one field's relocation, waits for the Reconciler to backfill and promote it (filterability restored), then moves to the next. **At most one field has filters rejected at any moment.** `--parallel=N` widens the in-flight count — faster wall-clock, N simultaneous filter outages. Only choose it when consumers can tolerate that.
+Sequential: the CLI initiates one field's relocation, waits for the Reconciler to backfill and promote it (filterability restored), then moves to the next. **At most one field has filters rejected at any moment.**
+
+> **`--parallel=N` is not implemented.** ADR 0033 describes it as an explicit opt-in that trades filter availability for wall-clock speed; it was deliberately left out of the initial implementation, since it must never be the default and needs multi-checkpoint tracking. The flag is unrecognised today — compaction is always sequential. If you need it, that is a feature request, not a misconfiguration.
+
+The CLI needs a running `bin/stardust reconciler` to make progress: it initiates each relocation and then polls the checkpoint the Reconciler drains. With no Reconciler it fails with a clear message rather than hanging indefinitely.
 
 ### 6.3 Monitoring
 
