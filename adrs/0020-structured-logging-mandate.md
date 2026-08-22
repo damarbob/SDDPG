@@ -49,7 +49,9 @@ Each source declares a closed list of event names in its feature blueprint. Exam
 
   Four of those — `entry_written`, `exhaustion_fallback`, `bulk_chunk_committed`, `bulk_chunk_rolled_back` — have been emitted from `src/Write/` since Phase 3 but were absent from this list until the update/delete surface landed. `EventVocabularyTest` scanned nine `src/` directories and `src/Write/` was not among them, so the omission stayed invisible while the suite was green. The scan now covers it, which is what surfaced them.
 - `export_api`: `export_accepted` (Phase 7 — emitted by the engine-side export submission entry point after the per-tenant active-job cap check + INSERT commits; mirrors the `bulk_api`/`bulk_accepted` pattern for symmetric observability of the two submission surfaces).
-- `registry`: `version_bump`, `low_cardinality_index`, `cardinality_sampled`, `spread_sampled`, `high_spread_model`, `compaction_planned`, `compaction_complete`, `page_provisioned`, `slot_reserved`, `retype_started`, `promote_to_ready`.
+- `registry`: `version_bump`, `low_cardinality_index`, `cardinality_sampled`, `spread_sampled`, `high_spread_model`, `compaction_planned`, `compaction_complete`, `page_provisioned`, `slot_reserved`, `retype_started`, `promote_to_ready`, `rename_started`, `rename_complete`.
+
+  `rename_started` / `rename_complete` were added for the ADR `0036` field-rename backfill. `rename_complete` is deliberately distinct from `promote_to_ready`: a rename touches no slot, so there is nothing to promote, and reusing the slot-lifecycle name would make the two indistinguishable in a dashboard. The rename work source otherwise reuses the existing `reconciler` chunk vocabulary, and reports per-row skips as a `rows_skipped` field on `chunk_complete` rather than as a new event name.
 
 Adding a new event name requires a blueprint update. Free-form `printf`-style log lines are not permitted.
 
