@@ -149,6 +149,14 @@ A 1:1 table (physically named `entry_slots_page_X`) that stores explicitly index
 
 ---
 
+### Field Deletion
+
+The definition-layer operation that removes a Field from a Model. **Severance is synchronous and total; the payload purge is asynchronous; the registry row dies last.** `deleteField()` commits one registry transaction and returns: `stardust_fields.deleted_at` is set and `is_filterable` cleared, any live Slot is tombstoned by the two-step sequence that nulls `field_id` before flipping `status` (releasing the `RESTRICT` foreign key inside the transaction), terminal sibling checkpoint rows are removed, the schema version is bumped, and a `running` `delete_field_{id}` checkpoint is opened. From that commit the field is gone from reads, point reads, introspection, filters, new CSV export headers and inbound writes — whose payloads have the key **stripped**, not merely left unmapped, because an unregistered key would otherwise be preserved verbatim and the purge would never converge. The Reconciler then removes the key from `entry_data.fields` in bounded chunks, and the final chunk hard-deletes the `stardust_fields` row, deletes the checkpoint, and bumps the version in one transaction. Under [ADR 0034](adrs/0034-non-filterable-fields-are-json-only.md) the common case holds no slot at all. There is no undelete, and the field's name is not reusable until the purge lands. Specified by [ADR 0037](adrs/0037-field-deletion-lifecycle.md).
+
+**See also:** Model Deletion, Soft Deletion, Tombstoned Slot, Backfill Pump, The Reconciler, [ADR 0037](adrs/0037-field-deletion-lifecycle.md), [ADR 0036](adrs/0036-entry-payload-keys-are-field-names.md).
+
+---
+
 ### Feature Flag (Rollback / Dual-Write)
 
 Two decoupled feature flags used during legacy data migration. The **Read Feature Flag** controls which schema serves read traffic (legacy Virtual Columns or new extension tables). The **Dual-Write Feature Flag** controls whether the event producer emits domain events for replication. These flags are intentionally independent: if reads are rolled back to legacy, the event producer must remain active to prevent data divergence in the extension tables.
@@ -177,7 +185,9 @@ The deterministic, schema-driven rules governing which extension table slots rec
 
 A user-defined data structure (schema) within a tenant, identified by `model_id`. A model defines the set of fields, their types, and their slot mappings in extension tables. All entries belong to exactly one model.
 
-**See also:** Entry, Tenant, Schema Registry.
+A model has a lifecycle: it is registered, may be renamed — one committed UPDATE, since identity is `stardust_models.id` and nothing resolves a model by name — and may be deleted (see Model Deletion). Its `id` is globally unique across tenants, and `entry_data.model_id` references it _logically_, with no foreign key: the data plane never foreign-keys into the Schema Registry.
+
+**See also:** Entry, Tenant, Schema Registry, Model Deletion, Model Compaction.
 
 ---
 
@@ -187,6 +197,14 @@ The operator-initiated operation that cures Spread: it relocates a fragmented Mo
 
 **Aliases:** Compaction.
 **See also:** Spread, Model-Affine Slot Reservation, Page, Slot, Tombstoned Slot, [ADR 0033](adrs/0033-operator-initiated-model-compaction.md), [ADR 0031](adrs/0031-slot-spread-metric.md), [ADR 0016](adrs/0016-field-type-change-lifecycle.md), [`runbooks/maintaining_low_spread.md`](runbooks/maintaining_low_spread.md).
+
+---
+
+### Model Deletion
+
+The definition-layer operation that removes a Model, its Fields, and every Entry belonging to it. Structurally the sibling of Field Deletion — **severance now, purge later, registry row last** — but where a field purge rewrites payload _keys_, a model purge destroys _rows_. `deleteModel()` commits one registry transaction and returns: `stardust_models.deleted_at` is set, every field of the model is marked `deleted_at` with `is_filterable` cleared (which makes every existing field-severance guard fire with no new predicates), every live Slot is tombstoned, terminal checkpoint rows are removed for every field, the schema version is bumped once, and a single `running` `delete_model_{id}` checkpoint is opened. The Reconciler then hard-deletes `entry_data` rows for the `(tenant_id, model_id)` partition in bounded chunks — cascading into `entry_slots_page_X` and deleting the matching `stardust_sync_queue` rows in the same transaction — and the final chunk re-asserts severance, deletes the `stardust_models` row (cascading its fields away), deletes the checkpoint, and bumps the version. Writes to a deleting model are **refused**, inverting Field Deletion's strip-don't-reject rule, because there is no residual valid entry to preserve and an accepted write would become a permanent orphan. The purge has **no dead-letter path** by design, and there is no undelete: entries, extension rows, queue rows, field definitions and the model are all gone. Specified by [ADR 0038](adrs/0038-model-deletion-lifecycle.md).
+
+**See also:** Field Deletion, Soft Deletion, Model, Tombstoned Slot, The Reconciler, `stardust_sync_queue`, [ADR 0038](adrs/0038-model-deletion-lifecycle.md), [ADR 0037](adrs/0037-field-deletion-lifecycle.md), [ADR 0018](adrs/0018-reconciler-poison-pill-semantics.md).
 
 ---
 
@@ -281,9 +299,13 @@ The capacity exhaustion anti-pattern where fields that are no longer filterable 
 
 ### Soft Deletion
 
-The temporal deletion strategy used by StarDust. Entries are never physically removed via `DELETE`; instead, the `deleted_at` column on `entry_data` is set to the deletion timestamp. The composite index `(tenant_id, deleted_at, created_at)` supports efficient queries that exclude soft-deleted records.
+The temporal deletion strategy used by StarDust for **Entries**. `deleteEntry()` never physically removes a row; instead, the `deleted_at` column on `entry_data` is set to the deletion timestamp. The composite index `(tenant_id, deleted_at, created_at)` supports efficient queries that exclude soft-deleted records.
 
-**See also:** Entry, Core Payload Table.
+This is a property of the entry lifecycle, not a guarantee that bytes are never freed. **The one operation that physically deletes `entry_data` rows is the Model Deletion purge** ([ADR 0038](adrs/0038-model-deletion-lifecycle.md)), and it is a definition-layer operation rather than an entry-level one: it destroys the Model those entries were instances of, so there is nothing left for a soft-deleted row to be a soft-deleted instance _of_. Note that the purge carries no `deleted_at IS NULL` predicate — matching the rename and retype drains — so already-soft-deleted entries are removed along with the rest.
+
+Do not confuse this with `stardust_fields.deleted_at` or `stardust_models.deleted_at`. Those are **drain-window markers**, not a soft-delete tier: they mean "a deletion is in flight", there is no undelete, and the purge's final chunk removes the row outright.
+
+**See also:** Entry, Core Payload Table, Field Deletion, Model Deletion.
 
 ---
 

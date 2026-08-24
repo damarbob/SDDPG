@@ -106,6 +106,23 @@ The three open questions previously listed here have all been answered by ADRs:
 
 The closed event-name vocabulary for `source: "reconciler"` lives in [ADR 0020 §Event Vocabulary](../adrs/0020-structured-logging-mandate.md). Per-event payload sub-fields layered on top of the standard daemon fields (`ts`, `level`, `source`, `event`, `tenant_id`, `correlation_id`) are pinned here.
 
+### `chunk_claimed` / `chunk_complete` — the `queue` discriminator
+
+The Reconciler drains several independent work sources in a fixed round-robin order, and they all report progress through the same two chunk events. **`queue` is the closed discriminator that says which source a chunk came from**, and it is required on both events. New work sources append to this enum; they never reuse another source's value, and they never introduce a parallel event name for the same thing.
+
+| `queue` | Work source | Added by | Chunk sub-fields beyond the standard set |
+| :-- | :-- | :-- | :-- |
+| `sync_queue` | Capacity-exhaustion fallback drain | Phase 5 | — |
+| `import_jobs` | Async bulk-ingest drain | Phase 5 | — |
+| `retype_backfill` | Field retype / filterability promotion | [ADR 0016](../adrs/0016-field-type-change-lifecycle.md) | — |
+| `rename_backfill` | Field rename payload rewrite | [ADR 0036](../adrs/0036-entry-payload-keys-are-field-names.md) | `rows_skipped` |
+| `delete_purge` | Field deletion payload purge | [ADR 0037](../adrs/0037-field-deletion-lifecycle.md) | `rows_scanned`, `rows_purged` |
+| `model_delete_purge` | Model deletion entry purge | [ADR 0038](../adrs/0038-model-deletion-lifecycle.md) | `rows_scanned`, `rows_deleted`, `sync_rows_deleted`, and `fields_dropped` on the final chunk |
+
+Two notes on the last row, because the naming is deliberate. `rows_deleted` rather than `rows_purged`: the rows are removed rather than rewritten, and an operator watching a destructive drain needs to see that distinction at a glance. `sync_rows_deleted` counts the `stardust_sync_queue` rows removed alongside their entries in the same transaction — it is the count of dead-letter rows that in-transaction delete _prevented_, and the only observable that would reveal it regressing.
+
+> **Recorded as drift, 2026-08-24.** This subsection was added with ADR 0038 and back-fills the `queue` values and chunk sub-fields introduced by ADR 0016, 0036 and 0037, none of which updated this document at the time. §5's technical sketch still describes the Reconciler as a single sync-queue loop and has not been brought forward; that is a larger edit and is left outstanding.
+
 ### `coercion_null`
 
 Emitted when the Reconciler attempts to coerce a JSON payload value into a typed slot column during retype backfill (per [ADR 0024](../adrs/0024-type-coercion-matrix-for-retype-backfill.md)) and the coercion fails. The slot column receives `NULL`; the JSON payload remains authoritative (ADR [`0013`](../adrs/0013-json-payload-as-system-of-record.md)); reads fall back to `JSON_EXTRACT`. The event is NOT emitted when the JSON value was already absent or already JSON `null` (no coercion was attempted).

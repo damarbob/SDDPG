@@ -49,6 +49,8 @@ flowchart TB
 ```
 
 > **Reading this map:** a solid arrow (`==>`) is a database-enforced foreign key; a dashed arrow (`-.->`) is a logical reference with no constraint. Every dashed arrow crosses a group boundary; every solid arrow stays inside one. `entry_data.model_id → stardust_models.id` is the canonical example of a deliberate logical-only link (data plane never foreign-keys into the registry). The detailed ERD below carries the same distinction on the relationship lines.
+>
+> That particular absence is the one this schema eventually pays for, and ADR [`0038`](../adrs/0038-model-deletion-lifecycle.md) is where the bill arrives: with no cascade from the model to its entries, deleting a model cannot be one statement, so it is a chunked application-level purge draining through the Reconciler. The trade was still the right one — the alternative puts an InnoDB constraint on the largest, most write-hot table in the engine to serve its rarest operation — but the cost is now concrete rather than theoretical, and worth knowing before anyone proposes "fixing" the dashed arrow.
 
 ## Entity-Relationship Diagram
 
@@ -224,6 +226,10 @@ A tiny, dedicated table exclusively for queuing writes that fail due to extensio
 | `entry_id`   | `BIGINT`   | The ID of the `entry_data` row that needs sync. |
 | `created_at` | `DATETIME` | Timestamp of queue entry creation.              |
 
+**Indexes:**
+
+- `INDEX (entry_id)` — added by ADR [`0038`](../adrs/0038-model-deletion-lifecycle.md). The table carried a primary key and nothing else until then, on the reasoning that it is tiny by design and any index should arrive as a separate reviewable change tied to the access pattern that needs it. Model deletion is that access pattern: its purge deletes each chunk's queue rows by `entry_id` in the same transaction as the entries themselves, and measured on MySQL 8.0.13 without this index that is a full table scan taking one exclusive record lock per row in the queue — held long enough to block the capacity-exhaustion enqueue on the write path, which ADR [`0007`](../adrs/0007-write-availability-over-query-completeness.md) does not permit. Bind the chunk's ids as literals; expressed as a subquery the delete reverts to the full scan.
+
 ---
 
 ## 4. Schema Registry Tables
@@ -234,16 +240,21 @@ A tiny, dedicated table exclusively for queuing writes that fail due to extensio
 
 One row per logical model within a tenant. Models are the owner of fields.
 
-| Column       | Type           | Description                                        |
-| :----------- | :------------- | :------------------------------------------------- |
-| `id`         | `INT`          | Primary Key. Matches `entry_data.model_id`.        |
-| `tenant_id`  | `BIGINT`       | Tenant owning the model.                           |
-| `name`       | `VARCHAR(128)` | Human-readable model name, unique within a tenant. |
-| `created_at` | `DATETIME`     | Timestamp of model registration.                   |
+| Column       | Type           | Description                                                                                                                                  |
+| :----------- | :------------- | :------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`         | `INT`          | Primary Key. Matches `entry_data.model_id`.                                                                                                  |
+| `tenant_id`  | `BIGINT`       | Tenant owning the model.                                                                                                                     |
+| `name`       | `VARCHAR(128)` | Human-readable model name, unique within a tenant.                                                                                           |
+| `created_at` | `DATETIME`     | Timestamp of model registration.                                                                                                             |
+| `deleted_at` | `DATETIME`     | `NULL` normally. Non-null means exactly "a model deletion is in flight" (ADR [`0038`](../adrs/0038-model-deletion-lifecycle.md)). Not a soft-delete tier — there is no undelete, and the purge's final chunk removes the row. |
 
 **Indexes:**
 
-- `UNIQUE (tenant_id, name)` — a tenant cannot define two models with the same name.
+- `UNIQUE (tenant_id, name)` — a tenant cannot define two models with the same name. Unconditional, so a model being deleted still holds its name until the purge completes.
+
+> **`deleted_at` is the model-level analogue of `stardust_fields.deleted_at`, and it is not redundant with it.** A model deletion marks every field of the model as well, which is what makes every existing field-severance guard fire with no new predicates — but a guard derived only from those markers reads "no field of this model is live", which is true of every brand-new empty model, and a model registered with no fields is legal. The model-level marker is what lets the purge's claim query assert its own integrity, what keeps a deleting model out of `listModels()` and `describeModel()`, and what stops the get-or-create model lookup silently handing back the id of a model whose entries are being erased.
+
+This table still has no `updated_at` — a model rename writes no timestamp.
 
 ### 4.2 `stardust_fields` (Field Registry)
 
@@ -453,7 +464,7 @@ Persistent cursor state for the **Backfill Pump** CLI (`bin/stardust backfill`),
 | `updated_at`        | `DATETIME`                                      | Timestamp of the most recent cursor commit. Drives the "stalled backfill" operator alert.                                                                                                          |
 | `completed_at`      | `DATETIME` **NULL**                             | Set when `status` enters `completed` or `failed`.                                                                                                                                                  |
 | `last_error`        | `VARCHAR(512)` **NULL**                         | Sanitized error message when `status='failed'`. Same PII hygiene as ADR [`0018`](../adrs/0018-reconciler-poison-pill-semantics.md).                                                                |
-| `source_declared_type` | `VARCHAR(16)` **NULL**                       | Retype-backfill only: the field's `declared_type` at retype initiation. The retype registry transaction overwrites `stardust_fields.declared_type` to the target type in the same transaction that inserts this row, so the source type is unrecoverable from the field row afterwards — the Reconciler reads it here to select the correct ADR [`0024`](../adrs/0024-type-coercion-matrix-for-retype-backfill.md) coercion-matrix cell. `NULL` for Backfill Pump CLI jobs (`job_name` without the `retype_field_` prefix), which have no retype semantics. |
+| `source_declared_type` | `VARCHAR(16)` **NULL**                       | Retype-backfill only: the field's `declared_type` at retype initiation. The retype registry transaction overwrites `stardust_fields.declared_type` to the target type in the same transaction that inserts this row, so the source type is unrecoverable from the field row afterwards — the Reconciler reads it here to select the correct ADR [`0024`](../adrs/0024-type-coercion-matrix-for-retype-backfill.md) coercion-matrix cell. `NULL` for every other `job_name` namespace and for Backfill Pump CLI jobs, none of which have retype semantics. |
 
 **Indexes and constraints:**
 
@@ -465,7 +476,20 @@ Persistent cursor state for the **Backfill Pump** CLI (`bin/stardust backfill`),
 > The CLI commits `last_processed_id` after each chunk. The frequency of commits (chunk size) is a CLI flag, not a table-level concern. On crash recovery, the CLI re-reads the row, resumes from `last_processed_id + 1`, and may re-process the partial chunk that was in flight at crash time — backfill operations MUST be idempotent.
 
 > [!NOTE]
-> **Retype-backfill usage.** In addition to the Backfill Pump CLI, the **Reconciler daemon** uses `backfill_checkpoints` to track per-field retype-backfill progress. The schema-registry retype transaction ([ADR 0016](../adrs/0016-field-type-change-lifecycle.md) step 1) inserts a `backfill_checkpoints` row with `job_name = 'retype_field_{field_id}'`, snapshotting the pre-retype type into `source_declared_type` in the same transaction that overwrites `stardust_fields.declared_type`. The Reconciler then performs a direct cursor scan over `entry_data` for the `(tenant_id, model_id)` partition of the retyping field, applying `JSON_EXTRACT` + type coercion per [ADR 0024](../adrs/0024-type-coercion-matrix-for-retype-backfill.md) using the `(source_declared_type, declared_type)` pair to select the matrix cell. It does **not** use `stardust_sync_queue` for this workload — that queue is reserved for capacity-exhaustion fallbacks only. The `last_processed_id` cursor advances per chunk; on daemon restart the Reconciler resumes from `last_processed_id + 1` for any `status = 'running'` retype-backfill rows. All retype-backfill writes MUST be idempotent (`INSERT … ON DUPLICATE KEY UPDATE`).
+> **Reconciler-daemon usage: four reserved `job_name` namespaces.** In addition to the Backfill Pump CLI, the **Reconciler daemon** uses `backfill_checkpoints` to track four asynchronous registry lifecycles. Each owns a reserved `job_name` prefix and each is drained by its own work source:
+>
+> | Prefix | Lifecycle | ADR | Final chunk |
+> | :-- | :-- | :-- | :-- |
+> | `retype_field_{field_id}` | Field retype / filterability promotion | [`0016`](../adrs/0016-field-type-change-lifecycle.md) | `backfilling → ready`; checkpoint marked `completed` |
+> | `rename_field_{field_id}` | Field rename payload rewrite | [`0036`](../adrs/0036-entry-payload-keys-are-field-names.md) | Clears `stardust_fields.previous_name`; checkpoint marked `completed` |
+> | `delete_field_{field_id}` | Field deletion payload purge | [`0037`](../adrs/0037-field-deletion-lifecycle.md) | Deletes the `stardust_fields` row **and this checkpoint row** |
+> | `delete_model_{model_id}` | Model deletion entry purge | [`0038`](../adrs/0038-model-deletion-lifecycle.md) | Deletes the `stardust_models` row (cascading its fields) **and this checkpoint row** |
+>
+> All four prefixes are thirteen characters, so every claim query recovers the id identically as `CAST(SUBSTRING(job_name, 14) AS UNSIGNED)` and selects its own rows with a `LIKE` on the prefix. **The four are disjoint** — `delete_model_` and `delete_field_` diverge at the eighth character, and `rename_`/`retype_` at the first — but disjointness among *engine* namespaces is not the whole story: `job_name` is operator-supplied for CLI jobs, `_` is a single-character `LIKE` wildcard, and the example `model_42_rebuild` above shows operators do use underscores. **Each claim query MUST escape the underscores in its pattern and MUST additionally carry the lifecycle's own integrity predicate** — `previous_name IS NOT NULL`, `deleted_at IS NOT NULL` — which no operator-named job can satisfy. That second predicate is what makes the inner join meaningful rather than incidental.
+>
+> `source_declared_type` is populated by the retype namespace only. **Row removal is confined to the two deletion namespaces**: ADR 0037 deletes terminal sibling rows for a field at initiation and its own row on the final chunk, and ADR 0038 does the same across every field of the model. For every other lifecycle rows are never removed, which is why an insert into this table must be expressed as `INSERT … ON DUPLICATE KEY UPDATE` — a second lifecycle for the same field otherwise collides with the `UNIQUE (job_name)` row left behind by the first.
+>
+> None of the four use `stardust_sync_queue` — that queue is reserved for capacity-exhaustion fallbacks only. The `last_processed_id` cursor advances per chunk; on daemon restart each work source resumes from `last_processed_id + 1` for its own `status = 'running'` rows. **All writes on all four MUST be idempotent**, because a chunk in flight at crash time is re-processed.
 
 ### 5.5 `stardust_import_jobs` (Async Bulk-Ingest Job Queue)
 
