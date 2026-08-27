@@ -42,7 +42,7 @@ Source-specific fields layer on top: the Reconciler adds `chunk_id`, `rows_claim
 Each source declares a closed list of event names in its feature blueprint. Examples:
 
 - `watcher`: `poll_started`, `poll_complete`, `provision_started`, `provision_complete`, `provision_failed`, `lock_contention`.
-- `reconciler`: `chunk_claimed`, `chunk_complete`, `chunk_partial` (some rows DLQ'd), `dlq_inserted`, `cache_miss`, `capacity_wait`, `coercion_null`, `lease_lost` (import-job abandoned-claim recovery: the prior worker self-aborts on a `worker_identity` mismatch and the re-claimer owns terminal state, mirroring the chronicler per ADR `0025`), `deadlock_retry` (payload in `blueprints/watcher_reconciler_daemons.md` §7).
+- `reconciler`: `chunk_claimed`, `chunk_complete`, `chunk_partial` (some rows DLQ'd), `dlq_inserted`, `cache_miss`, `capacity_wait`, `coercion_null`, `lease_lost` (import-job abandoned-claim recovery: the prior worker self-aborts on a `worker_identity` mismatch and the re-claimer owns terminal state, mirroring the chronicler per ADR `0025`), `deadlock_retry` (payload in `blueprints/watcher_reconciler_daemons.md` §7), `lock_wait`.
 - `liberator`: `sweep_started`, `sweep_chunk`, `sweep_complete`, `deadlock_retry`, `sweep_gap_flagged`.
 - `chronicler`: `job_claimed`, `job_complete`, `job_failed`, `low_disk`, `artifact_oversized`, `gc_swept`.
 - `api`: `request`, `pre_flight_rejected`, `bulk_accepted`, `payload_too_large`, `cache_miss` (Phase 4 schema-version cache refresh, per ADR `0015`; shares the name with the reconciler-source event below — the `source` field disambiguates), `entry_written`, `entry_updated`, `entry_deleted`, `exhaustion_fallback`, `bulk_chunk_committed`, `bulk_chunk_rolled_back`.
@@ -64,6 +64,12 @@ Each source declares a closed list of event names in its feature blueprint. Exam
   `rename_started` / `rename_complete` were added for the ADR `0036` field-rename backfill. `rename_complete` is deliberately distinct from `promote_to_ready`: a rename touches no slot, so there is nothing to promote, and reusing the slot-lifecycle name would make the two indistinguishable in a dashboard. The rename work source otherwise reuses the existing `reconciler` chunk vocabulary, and reports per-row skips as a `rows_skipped` field on `chunk_complete` rather than as a new event name.
 
 `deadlock_retry` was added to this source on 2026-08-25 for the ADR `0038` model purge, which retries errno 1205 / 1213 on a bounded budget. The name is shared with the `liberator` and `chronicler` sources deliberately — it is the same phenomenon, and the `source` field disambiguates exactly as it does for `cache_miss`. Note the model purge has **no gap path**: on budget exhaustion it rethrows with its cursor untouched rather than skipping rows, because a skipped chunk would leave `entry_data` rows with a dangling `model_id` that nothing would ever notice.
+
+`lock_wait` was added to this source on 2026-08-27. `deadlock_retry` reports an attempt that will be retried; `lock_wait` reports the moment a work source stops retrying and hands the chunk back, and the two are deliberately separate so "recovered after contention" and "still blocked" are distinguishable without counting attempts against a configured budget. It carries `queue`, `attempts` and `errno`.
+
+The five work sources that emit it — sync-queue, import-job, retype, rename and field-delete purge — return `TickOutcome::LOCK_WAIT` rather than rethrowing, because each rolls its chunk back whole with its cursor on a row that transaction owns, so the next tick retries identical work with nothing skipped and nothing failed. The model purge above keeps its rethrow for the reason recorded there. `lock_wait` is therefore not an error: it is back-pressure, and the correct alert is on its *persistence*, not its occurrence.
+
+It is distinct from `capacity_wait` on purpose, though both mean "claimed, rolled back, backing off". `capacity_wait` means the engine is out of slot inventory and needs the Watcher to provision; `lock_wait` means another transaction held a row and will let go. Sharing a name would make sync-queue depth stop being the clean signal of filterable backfill debt that ADR `0007` designates it.
 
 Adding a new event name requires a blueprint update. Free-form `printf`-style log lines are not permitted.
 
