@@ -58,6 +58,8 @@ By default the CLI is a **long-lived operator process** that relocates **one fie
 
 **Resume is re-run.** If the CLI crashes, nothing is stuck: in-flight checkpoints are standard retype checkpoints and the Reconciler drains them to completion regardless. Re-running `compact:model` recomputes the remaining delta — already-relocated fields sit on target pages and are no-ops — so the operation converges idempotently with **no compaction-specific state table, no new daemon, and no new work source**.
 
+> **Narrowed 2026-08-27 by [`0039`](0039-compaction-refuses-to-plan-mid-lifecycle.md).** The re-run is **not immediate**: while any field of the model still has a running retype checkpoint, `plan()` — and therefore `--dry-run` — refuses with `RetypeInProgressException` instead of planning. Convergence and no-stuck-state are unchanged; the operator must let the Reconciler drain first. The paragraph above as written did not hold: a re-run inside that window did not recompute the remaining delta, it computed one that silently omitted the in-flight field, producing a `pages_after` the ADR `0031` sample then contradicted. See `0039` for the measurement.
+
 ### Backfill execution and verification
 
 The chunked backfill, `backfilling → ready` promotion, schema-version bumps, ADR `0019` post-backfill cardinality sample, and ADR `0031` `trigger='post_relocation'` spread sample are all the existing pipeline, untouched. The final field's spread sample doubles as the operation's built-in success confirmation: `excess_pages` at (or near, if family ceilings force >1 page) zero.
