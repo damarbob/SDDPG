@@ -13,6 +13,8 @@ Synchronous reads will use a strict two-query execution pattern. The first query
 
 This pattern is mandatory for the native read path. Cross-page queries and complex filters must not be executed as a single unbounded join intended to both discover and materialize the full result page in one step.
 
+> **Scoped 2026-08-30 by ADR [`0041`](0041-sort-ordering-and-the-anchored-cursor.md):** the two-query shape and the bounded **materialization** of query 2 are unchanged and remain mandatory. The bounded-**discovery** property of query 1 now holds only for the default ordering and the intrinsic `created_at` sort, both of which stay index-ordered (measured on 8.0.13: a backward index scan for `id DESC`, a range scan on `(tenant_id, deleted_at, created_at)` for `created_at`). A sort on a **field's slot column** cannot use that column's index while the query leads with `entry_data`, so query 1 plans as `Using temporary; Using filesort` and examines the whole filtered set to find each page. The query count is still two and the page is still bounded; the row count query 1 examines is not. 0041 records the measurement and the reasoning.
+
 ## Consequences
 
 **Positive:**

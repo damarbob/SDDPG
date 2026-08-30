@@ -25,6 +25,7 @@ The schema registry's `is_filterable` flag retains exclusive jurisdiction over t
 | :------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
 | `supportedOperators(): array`          | Returns the leaf operators (subset of ADR `0021`'s closed set, plus any extension nodes) the driver can execute. Static per driver build.                  |
 | `supportsFilterOn(int $fieldId): bool` | Returns whether the driver can satisfy a filter against the given field — covers `is_filterable` for MySQL and arbitrary index state for external engines. |
+| `supportsSortOn(int $fieldId): bool`   | Returns whether the driver can **order results by** the given field. Separate from `supportsFilterOn` because the two answers need not agree: they coincide on the MySQL driver, where both reduce to "the field has a live indexed slot", but an external engine may index a field for matching without keeping it orderable. Added 2026-08-30 with ADR [`0041`](0041-sort-ordering-and-the-anchored-cursor.md); intrinsic sort targets (`entry_data.id`, `created_at`) are core-table columns rather than fields and never reach it. |
 | `supportsFuzzySearch(): bool`, etc.    | Boolean capability declarations matching the existing search-adapter blueprint sketch. One method per coarse capability.                                   |
 | `consistencyModel(): "strong"          | "eventual"`                                                                                                                                                | Returns the active driver's consistency guarantee. Callers translate this into their own consumer-facing surface (e.g., a response header). |
 
@@ -37,6 +38,7 @@ The `MysqlNativeDriver` implements `supportsFilterOn($fieldId)` by returning the
 2. For each leaf:
      2a. Check operator ∈ driver.supportedOperators() — reject if not.
      2b. Check driver.supportsFilterOn(field_id) === true — reject if not.
+     2c. For a sort on a field, check driver.supportsSortOn(field_id) === true — reject if not.
 3. Hand the validated QueryFilter to driver.list(...).
 ```
 
