@@ -40,6 +40,8 @@ For a given `(tenant_id, model_id)`:
   ```
 
   where `capacity = { str: 25, int: 15, num: 10, dt: 10 }`. A model with 30 string + 5 int filterable fields has `theoretical_min_pages = max(ceil(30/25), ceil(5/15)) = max(2, 1) = 2`.
+
+  > **Superseded 2026-09-05 by ADR [`0044`](0044-theoretical-minimum-pages-from-real-capacity.md):** the divisor above is the page *layout*, which stopped being a page's real capacity once ADR `0034` made unindexed columns unclaimable and ADRs `0042` / `0043` made pages heterogeneous. Measured on 8.0.13 at the default `k = 4`, five serially promoted `str` fields on two four-column pages reported `theoretical_min_pages = 1` against a true floor of 2, and nine fields fired `high_spread_model` at a model that was already optimally packed. 0044 derives the floor from the capacity the model's own pages actually offer — indexed free slots plus the slots it already holds there — taken roomiest-first per family. **It remains a max over families, never a sum, and on uniform pages it reduces exactly to the formula above**, so the worked example is unchanged. Everything else in this section — `pages_occupied`, `excess_pages`, the event fields and the two-bound alert gate — stands as written.
 - **`excess_pages`** = `pages_occupied - theoretical_min_pages`. This is the count of avoidable extra joins a fully-referencing query pays. `excess_pages = 0` is optimal packing; it is the metric operators act on.
 
 ### Sampling Triggers
@@ -153,6 +155,8 @@ The architecture deliberately does **not** auto-compact, for the same family of 
 - The advisory is best-effort and periodic. A relocation that worsens spread between two periodic samples is invisible for up to a day unless it goes through a pipeline that fires the post-relocation one-shot. Acceptable for spread (which only changes on registry mutation, never on data ingest), less so for tight operational SLOs.
 - Spread is measured but never remediated by this ADR. Remediation is the compaction operation of ADR `0033`; until that ships, `high_spread_model` is actionable only by model redesign or manual relocation.
 - `theoretical_min_pages` assumes the standard per-family page layout. If a future ADR introduces heterogeneous page layouts, the min-pages formula must be revised in lockstep, or the metric will misreport excess.
+
+  > **This happened.** ADRs `0034`, `0042` and `0043` introduced heterogeneous layouts and the formula was not revised, so the metric misreported excess for four months. ADR [`0044`](0044-theoretical-minimum-pages-from-real-capacity.md) is the revision, and it carries two consequences this bullet did not anticipate: the corrected floor is **time-varying** (it moves when another model claims a slot on a shared page), and spread that headroom policy forces now reports zero excess by design.
 - The metric is per-tenant per-model. A model fragmented for tenant A but compact for tenant B emits independently per partition; operators must read `tenant_id` to triage — the same tenant-awareness ADR `0019` already requires.
 - Threshold tuning is deployment-specific. The conservative default (`excess_pages >= 2`) will under-report for latency-critical operators and over-report for spread-tolerant ones; the bound is explicit configuration, not a guess the pipeline makes.
 

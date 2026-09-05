@@ -44,6 +44,14 @@ A pure registry computation — no data-plane reads, no locks held across planni
 3. **Up-front capacity check**: the plan is admissible only if the target pages hold enough `free` slots of each required family for every relocation, accounting for double-occupancy (vacated slots return only after Liberator sweep and therefore count as unavailable). If insufficient, the operation fails fast with a typed `CompactionCapacityException` before **any** mutation — no partial initiation. The operator's remedies are to wait for Liberator reclamation, let the Watcher provision capacity, and re-run.
 4. **`--dry-run`** prints the full plan — current spread, chosen target pages, per-field relocations, no-op count, capacity verdict — and exits without mutating anything or emitting events.
 
+> **Amended 2026-09-05 by ADR [`0044`](0044-theoretical-minimum-pages-from-real-capacity.md)**, in two places above.
+>
+> **Step 2** no longer uses a family-ceiling formula. The floor is derived from the capacity the model's own candidate pages actually offer — indexed free slots plus the slots the model already holds there — because ADRs `0042` / `0043` made page capacity heterogeneous and there is no constant left to divide by. Sharing the formula with ADR `0031` is unchanged and is now stronger: both subsystems read the same per-page capacity through one component.
+>
+> **Step 3's remedy is wrong as written.** *"Let the Watcher provision capacity"* cannot help under any circumstances: candidates are drawn from the pages the model already occupies (the restriction this ADR states one paragraph later), so a newly provisioned page is not one. The waiting-for-Liberator half is correct and stands.
+>
+> One behavioural consequence worth stating: with a correct floor, a model whose pages have **no free capacity at all** is *at its floor*, not inadmissible — it plans a no-op and reports `excess_pages = 0`. `CompactionCapacityException` remains reachable where families each fit on one page but disagree about which.
+
 ### Per-field relocation is a same-type retype
 
 Each relocation runs the ADR `0016` initiation tuple in one transaction, exactly as the retype initiator does, with the declared type and filterability **unchanged** (no `stardust_fields` mutation): tombstone the field's current live slot; reserve a new `backfilling` slot **on the planner's pinned target page** (indexed, per ADR `0003`); bump `stardust_schema_version`; insert a standard `retype_field_{id}` checkpoint with `source_declared_type` set to the field's current type — which routes the backfill through the ADR `0024` **identity diagonal**.

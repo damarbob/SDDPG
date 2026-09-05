@@ -45,12 +45,14 @@ Key fields:
 | Field | Meaning |
 | :--- | :--- |
 | `pages_occupied` | Distinct pages holding the model's live filterable slots |
-| `theoretical_min_pages` | Fewest pages the model's filterable fields could occupy, given family ceilings |
+| `theoretical_min_pages` | Fewest of the pages the model already occupies that could hold its filterable fields, given what those pages can actually take |
 | `excess_pages` | `pages_occupied − theoretical_min_pages` — **the count of avoidable joins**; `0` is optimal packing |
 | `live_slot_count` | Live query-servicing slots (`assigned`/`ready`) behind the sample; `backfilling` and `tombstoned` slots are excluded because they serve no query |
 | `trigger` | `periodic`, `post_relocation`, or `on_demand` |
 
-Read `excess_pages`, not `pages_occupied`: a model that genuinely needs three pages (family-ceiling-bound) reports `excess_pages = 0` and needs nothing from you.
+Read `excess_pages`, not `pages_occupied`: a model that genuinely needs three pages reports `excess_pages = 0` and needs nothing from you.
+
+Two properties of `theoretical_min_pages` are worth knowing before you triage on it ([ADR 0044](../adrs/0044-theoretical-minimum-pages-from-real-capacity.md)). It is measured against the capacity the model's own pages actually offer, so it **can move without the model changing** — another model claiming a free slot on a shared page is enough. And spread forced by the deployment's index headroom (`page_index_headroom`, `k`) reports **zero excess**: `k + 1` filterable fields of one family cannot share a `k`-column page, so those joins are structural. The lever there is a larger `k` for future pages, not compaction.
 
 ### 3.2 Threshold tuning
 
@@ -78,7 +80,9 @@ WHERE m.tenant_id = :tenant_id
 GROUP BY f.model_id;
 ```
 
-Compute the theoretical minimum by hand from the per-family counts: `max(ceil(str/25), ceil(int/15), ceil(num/10), ceil(dt/10))`. `excess_pages` = `pages_occupied` minus that. The query touches only registry tables — safe to run against production at any time.
+The query touches only registry tables — safe to run against production at any time.
+
+Computing the theoretical minimum by hand is no longer a division by a constant. For each family, list the model's pages by how many slots of that family they could hold — the `free` indexed ones plus the ones this model already holds there — take the roomiest first, and count how many it takes to cover the field count; the minimum is the largest of those four counts. `excess_pages` = `pages_occupied` minus that. In practice `bin/stardust spread:report --tenant=N --model=M` is the shortcut, and it reads the same registry tables.
 
 ## 4. Decision framework: Accept / Compact / Redesign
 
@@ -89,7 +93,7 @@ When `high_spread_model` fires (or your manual query surprises you):
 | `excess_pages` 0–1 | **Accept.** One avoidable join is rarely worth a data migration. |
 | `excess_pages >= 2`, model is hot / latency-critical | **Compact** (§6), in a maintenance window. |
 | `excess_pages >= 2`, model is low-traffic | **Accept.** The joins are cheap and nobody is waiting on them. |
-| `theoretical_min_pages > 1` (family-ceiling-bound) and that is the pain | **Redesign.** Compaction cannot go below the floor — split the model, or demote filterable fields you don't actually filter on. |
+| `theoretical_min_pages > 1` and that is the pain | **Redesign, or raise `k`.** Compaction cannot go below the floor. Split the model, demote filterable fields you don't actually filter on, or — if the floor is set by page width rather than field count — raise `page_index_headroom` so future pages are wider. Existing pages keep their width ([ADR 0012](../adrs/0012-immutable-extension-page-ddl.md)). |
 
 Compaction is a real migration (it rewrites the model's filterable projection and each in-flight field temporarily loses filterability), so the bar is "the metric says avoidable, the workload says it matters" — both, not either.
 
@@ -140,10 +144,10 @@ Killing the CLI (or losing the box) is benign. In-flight checkpoints are standar
 
 | Symptom | Cause & action |
 | :--- | :--- |
-| `CompactionCapacityException` at start | Target pages lack free slots (double-occupancy needs headroom, and fragmented deployments are exactly the ones short on it). Check tombstone depth (`SELECT status, COUNT(*) FROM stardust_slot_assignments GROUP BY status`), let the Liberator sweep and/or the Watcher provision, re-run. Nothing was mutated. |
+| `CompactionCapacityException` at start | Target pages lack free slots of some family (double-occupancy needs headroom, and fragmented deployments are exactly the ones short on it). Check tombstone depth (`SELECT status, COUNT(*) FROM stardust_slot_assignments GROUP BY status`) and let the Liberator sweep, then re-run. **Provisioning does not help** — compaction only considers pages the model already occupies, so a new page is not a candidate. Nothing was mutated. |
 | `RetypeInProgressException` on a field | The field is already mid-retype/promotion. Let the running checkpoint finish (watch for its `promote_to_ready`), then re-run. |
 | Nonzero `coercion_null` events during compaction | Pre-existing malformed payload values failing to parse under their own declared type during the identity backfill. This is *visibility, not loss* — the JSON payload stays authoritative ([ADR 0013](../adrs/0013-json-payload-as-system-of-record.md)) and reads fall back to it. Audit the flagged rows; expect nonzero counts on dirty legacy models. |
-| `excess_pages` still > 0 after a clean `compaction_complete` | Compare against `theoretical_min_pages` — if they now match, you have hit the family ceiling and this is the floor. The remaining lever is redesign (§4), not another compaction. |
+| `excess_pages` still > 0 after a clean `compaction_complete` | Compare against `theoretical_min_pages` — if they now match, this is the floor. The remaining lever is redesign or a larger `k` (§4), not another compaction. |
 | Compaction makes no progress after initiation | Reconciler workers are down or saturated. The checkpoint is durable; start/scale `bin/stardust reconciler` and progress resumes. |
 
 ## 8. References
