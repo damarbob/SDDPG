@@ -51,6 +51,23 @@ Concretely, `ProvisioningPlanner::indexedColumnsFor()` changes in two ways: it i
 
 The rule applies to every provisioning trigger. A page provisioned by `low_capacity` with no pending demand previously carried zero indexes and was therefore pure dead weight; it now carries `4k` indexed columns and is genuine capacity.
 
+### Why four
+
+The measurements below rule out the extremes but **cannot distinguish `k=2` from `k=4`** — the difference sits inside run-to-run variance. The constant follows from an asymmetry argument instead, which the same measurements do support.
+
+One extra page costs about what eleven extra indexes cost. Each increment of `k` adds four indexes (one per family), so an increment costs roughly 6.4% of write throughput, while failing to prevent a page costs roughly 18%. **An increment therefore pays whenever the probability that the extra slot prevents a page exceeds `6.4 / 18 ≈ 36%`.**
+
+The errors are not symmetric. Over-provisioning wastes about 1.6% per idle index and nothing else. Under-provisioning costs a page — 18%, plus an extra `JOIN` on every multi-field query, plus permanence, since ADR `0012` freezes the page at birth and no later decision can widen it. **Erring high is roughly an order of magnitude cheaper than erring low**, and only the low side is irreversible.
+
+Four is the largest value whose final increment still plausibly clears the 36% bar for the commonest family: a model with four filterable string fields is unremarkable, whereas one with six is not, and `k=6`/`k=8` are rejected on measured cost below. `k=2` is defensible on the same evidence and costs less; the case for 4 over 2 is the asymmetry, not a measured difference between them.
+
+### Two refinements deliberately left open
+
+Both use information the engine already holds and would size headroom better than any constant. Neither is decided here, because each changes the *rule* rather than the constant, and the constant is what this ADR exists to establish.
+
+1. **Per-family `k`.** A flat `k` spends the same headroom on `dt` as on `str`, but the 25/15/10/10 layout encodes a belief that string fields dominate, and the 36% break-even is itself per-family. Something like `str 4, int 3, num 2, dt 2` costs eleven indexes instead of sixteen and puts the headroom where fields actually land.
+2. **Registry-derived `k`.** A model's *registered* field count per family, clamped to `[k_min, k_max]`, would size the demo model's page to exactly what it needs and waste nothing. See the note in Rejected alternatives: the objection to it is answered by the cap, and it is deferred rather than refused.
+
 Everything else in ADR `0003` stands: provisioning remains schema-driven and registration-time, `is_filterable` remains the source of truth for queryability, and indexes are still incorporated into page DDL at creation rather than added opportunistically in response to query behaviour. ADR `0012` is untouched — this is still creation-time-only index composition with no `ALTER TABLE` on any page, populated or empty. ADR `0016` commitment 4 is untouched — neither retype nor promotion executes DDL synchronously; only the Watcher provisions.
 
 What changes is the *width* of the creation-time set, and the justification is that ADR `0034` removed the alternative use of the columns being left out.
@@ -122,7 +139,7 @@ It is worth recording *why* it must not be done alone: switching the global rati
 - **Index all sixty columns.** −59% write throughput and 99 MB of index per 50,000-row page, for capacity most models never claim. This is the outcome ADR `0003` was right to refuse.
 - **`k = 8`.** −43% write throughput and 57 MB per page, to buy headroom beyond what field counts justify. The measured knee is between 16 and 32 indexes.
 - **`ALTER TABLE … ADD INDEX` on an empty page.** ADR `0012`'s own title ("Empty-Table-Only Schema Changes") permits it and `EmptyTableGuard` exists unused for exactly this. But a page stops being empty at the first write after its first reservation, so it buys one promotion's grace and does not address serial promotion at all.
-- **Derive the index set from registered-but-not-yet-filterable fields.** Uses the registry's own knowledge instead of a constant, and would size headroom exactly. Rejected as speculative in a different direction — registration is not a commitment to promote, and a model declaring forty fields would provision indexes for all of them.
+- **Derive the index set from registered-but-not-yet-filterable fields — deferred, not rejected.** Uses the registry's own knowledge instead of a constant, and would size headroom exactly. The objection is that registration is not a commitment to promote, so a model declaring forty fields would provision indexes for all of them — but a `k_max` cap answers that, and the signal is real rather than speculative. Recorded under "Two refinements deliberately left open" above; settle it before implementing, since it would replace the constant this ADR establishes.
 - **Leave it and rely on compaction.** Compaction cannot run from the state the policy creates, as measured above. The cure is unreachable from the disease.
 
 ## Related
