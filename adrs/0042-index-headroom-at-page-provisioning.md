@@ -51,6 +51,8 @@ Concretely, `ProvisioningPlanner::indexedColumnsFor()` changes in two ways: it i
 
 The rule applies to every provisioning trigger. A page provisioned by `low_capacity` with no pending demand previously carried zero indexes and was therefore pure dead weight; it now carries `4k` indexed columns and is genuine capacity.
 
+Under ADR `0043` a page carries exactly the columns it indexes, so `k` sets a page's **capacity** rather than merely how much of it is usable. A plan naming no column is then a page with no slots at all, which is why `k = 0` with no demand declines to provision instead of emitting an all-unindexed page; `0043` §5 carries that rule. The guarantee that a *demanded* family always receives a column is unaffected, since the floor below is applied by the planner.
+
 ### Why four
 
 The measurements below rule out the extremes but **cannot distinguish `k=2` from `k=4`** — the difference sits inside run-to-run variance. The constant follows from an asymmetry argument instead, which the same measurements do support.
