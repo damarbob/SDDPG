@@ -63,6 +63,11 @@ The Watcher and Reconciler each have such a blueprint ([`watcher_reconciler_daem
 
 13. When no rows in `stardust_slot_assignments` are `status = 'tombstoned'`, the Liberator sleeps for the configured idle interval (default 10s) and re-polls. The idle path emits no events to avoid log spam — only `sweep_started` (with a populated batch) generates output.
 
+### Slot recycling
+
+14. A slot that has been through the lifecycle before begins its next sweep at the **beginning of the page**, not at its previous occupant's cursor. `sweep_cursor_id` and `sweep_gap_count` are cleared by the UPDATE that flips a slot to `tombstoned` — in the severing lifecycle's own transaction, not by the Liberator — and are **preserved** across the `tombstoned → free` reclaim of AC#5, so both annotations always describe the sweep that produced the slot's current state and remain readable by an operator after it. Per [ADR 0045](../adrs/0045-tombstoning-resets-the-sweep-annotations.md), which amends [ADR 0009](../adrs/0009-tombstone-based-slot-eviction.md) on a case 0009 does not specify. This is what makes AC#6's "eligible for assignment" claim hold on the second and later occupants **for a sweep that completed without taking AC#8's gap path**: measured on 8.0.13 before the reset existed, a recycled column returned to `free` still holding all twenty of the previous field's values, with AC#12's `sweep_chunk` payload and `sweep_complete` both honest for the empty range they walked. **AC#8 remains a route to the same residue** — an abandoned chunk is skipped, the sweep still reaches `sweep_complete`, and the slot reclaims to `free` with that range populated — which this AC does not address and ADR 0045 explicitly leaves in scope for ADR 0009's gap policy. The `sweep_gap_count` annotation is what distinguishes the two cases on an already-reserved slot, and per this AC it now attributes to exactly one sweep.
+15. The reset never applies to a slot that is already `tombstoned`. Every site that performs the flip is guarded on the slot's status being live (`assigned`, `backfilling`, `ready`), so a sweep in flight — including one the Liberator is mid-chunk on — keeps the cursor that is correct for it, and AC#9's crash-resumption property is unaffected.
+
 ## 5. Technical Sketch
 
 ```mermaid
@@ -101,7 +106,7 @@ flowchart TD
 
 - The Liberator never coordinates with another Liberator — singleton enforcement is invariant per [ADR 0009](../adrs/0009-tombstone-based-slot-eviction.md). The sweep workload is IO-bound; horizontal scaling delivers no throughput benefit and degrades the per-slot `sweep_cursor_id` semantics.
 - Cursor advancement and chunk `UPDATE` commit in one transaction. There is deliberately no separate "checkpoint flush" cadence — a stale cursor after a Liberator crash would let the Watcher undercount free capacity, defeating the whole capacity-accounting model the Liberator exists to feed.
-- `sweep_gap_flagged` is non-fatal. The Liberator continues past a gap rather than blocking forever on a hot-read partition. Operators reviewing the gap can re-tombstone the slot to retry sweep over the gap range, or accept the gap (the rows in the gap range are a small fraction of one slot column, and the field's data is still authoritative in `entry_data.fields` per [ADR 0013](../adrs/0013-json-payload-as-system-of-record.md)).
+- `sweep_gap_flagged` is non-fatal. The Liberator continues past a gap rather than blocking forever on a hot-read partition. Operators reviewing the gap can re-tombstone the slot to retry sweep over the gap range — which AC#14 is what makes effective, since before it a re-tombstoned slot resumed past the gap and nullified nothing — or accept the gap (the rows in the gap range are a small fraction of one slot column, and the field's data is still authoritative in `entry_data.fields` per [ADR 0013](../adrs/0013-json-payload-as-system-of-record.md)).
 
 ## 6. Open Questions
 
