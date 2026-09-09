@@ -3,6 +3,8 @@
 > **Scope:** Engine build only. Legacy data migration and StarGate integration are out of scope.
 > Migration principles are in [`legacy_data_migration.md`](legacy_data_migration.md).
 
+> **Status: historical, frozen at Phase 8 / ADR 0035.** This document sequenced the *initial* engine build. It stopped being extended once that build completed, and the Phase list and [ADR Coverage Index](#adr-coverage-index) below are frozen by design, not by oversight — every ADR from `0036` onward ships without a phase number (see the phase table in the top-level `CLAUDE.md`), and this is not the place to add one. It is kept in place, unedited beyond this notice, because its `§0`–`§8` section anchors are cited from shipped code (`src/Write/`, `src/Read/`) and its [Document Precedence](#document-precedence) section is cited by `README.md` and by ADR [`0029`](adrs/0029-liberator-sweep-omits-tenant-predicate.md) (Accepted) — do not renumber or delete sections. The Document Precedence rule itself is still in force and unaffected by this freeze.
+
 ## Overview
 
 This document sequences the StarDust engine build into nine dependency-respecting phases. Each phase is a **gate**: all exit criteria must be met before work on the next phase begins. The source-of-truth specifications for each component remain in their respective [`adrs/`](adrs/) and [`blueprints/`](blueprints/) files; this document tells you in which order to build them and what "done" looks like.
@@ -430,7 +432,7 @@ Full column definitions, index specifications, and atomicity invariants for all 
 
 ## ADR Coverage Index
 
-Every accepted ADR is referenced by at least one phase above.
+Every accepted ADR **through 0035** is referenced by at least one phase above. This index is frozen there per the status notice at the top of this document — an ADR numbered `0036` or higher missing from this table is expected, not a gap to fix.
 
 | ADR | Phase(s) |
 | :--- | :--- |

@@ -87,7 +87,7 @@ graph TB
 | [`adrs/`](adrs/)                                                                 | Architecture Decision Records — immutable log of _why_ key technical decisions were made. Prevents re-litigating settled debates.                          |
 | [`blueprints/queryfilter_wire_format.md`](blueprints/queryfilter_wire_format.md) | QueryFilter Wire Format — normative JSON encoding for consumer filter payloads: envelope, node shapes, typed values, error model, and JSON Schema sidecar. |
 | [`schemas/queryfilter.schema.json`](schemas/queryfilter.schema.json)             | JSON Schema (Draft 2020-12) for the v1 QueryFilter wire format. Normative artifact for consumer-side and CI validation.                                    |
-| [`implementation_phases.md`](implementation_phases.md)                           | Build sequencer — nine dependency-ordered phases with exit criteria, ADR coverage index, and document precedence rules.                                    |
+| [`implementation_phases.md`](implementation_phases.md)                           | **Historical** — the nine-phase build sequencer for the initial engine build (Phase 0–8), frozen at ADR 0035; not maintained for work since. Its document precedence rules (below) are still in force. |
 | [`runbooks/maintaining_low_spread.md`](runbooks/maintaining_low_spread.md)       | Ops runbook — watching the spread metric, prevention hygiene, and operator-initiated model compaction (ADRs 0031–0033).                                    |
 
 ## Planned Contents
