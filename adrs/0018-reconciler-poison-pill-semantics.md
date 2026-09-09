@@ -57,7 +57,7 @@ The chunk commits as a single transaction. Either every survivor in the chunk is
 
 ### Replay
 
-Replay is **operator-initiated**, never automatic. A CLI command (`php spark stardust:reconciler:dlq:replay --id=N` or `--reason=...` for batch) re-inserts the DLQ row's `entry_id` into `stardust_sync_queue`, increments `retry_count`, and deletes the DLQ row. Both writes commit in one transaction. The Reconciler then drains the re-enqueued row through its standard polling cycle.
+Replay is **operator-initiated**, never automatic. A CLI command (`bin/stardust reconciler:dlq:replay --id=N` or `--reason=...` for batch) re-inserts the DLQ row's `entry_id` into `stardust_sync_queue`, increments `retry_count`, and deletes the DLQ row. Both writes commit in one transaction. The Reconciler then drains the re-enqueued row through its standard polling cycle.
 
 Operators are expected to investigate the underlying cause before replaying — replaying a row whose `entry_data.fields` is still malformed will simply re-quarantine it. Pure-loop avoidance is the operator's responsibility, not the Reconciler's; an automatic replay path would re-introduce the chunk-rollback poison-pill behavior this ADR rejects.
 

@@ -9,17 +9,25 @@
 
 ### Advisory Lock
 
-A MySQL `GET_LOCK()` call used for mutual exclusion during page provisioning. The Watcher acquires `GET_LOCK('stardust_page_provision', 10)` before executing DDL, preventing concurrent provisioning attempts from causing table name collisions or metadata lock contention.
+A MySQL `GET_LOCK()` call used for mutual exclusion during page provisioning. The Watcher acquires an advisory lock before executing DDL, so concurrent provisioning attempts cannot cause table name collisions or metadata lock contention. Specified by [ADR 0008](adrs/0008-singleton-watcher-multi-worker-reconciler.md); the exact lock name and timeout value live in code, not in any ADR.
 
-**See also:** The Watcher, Page.
+**See also:** The Watcher, Page, [ADR 0008](adrs/0008-singleton-watcher-multi-worker-reconciler.md).
+
+---
+
+### Anchored Cursor
+
+The pagination-token shape for a sorted read, introduced by [ADR 0041](adrs/0041-sort-ordering-and-the-anchored-cursor.md). It does not carry the sort key's value directly — embedding it was rejected because a string slot's 4096-character value would push a self-contained token past practical URL/header size limits. Instead the token names the anchor row's `entry_id`, the sort key's identity, and the sort direction; the compiler resolves the anchor's actual sort value at query time via a one-row derived table (`CROSS JOIN (SELECT (SELECT <col> ...) AS av) sort_anchor`), which keeps the token constant-size regardless of the sorted field's width. An unsorted read keeps emitting the original `base64url("v1:" . entryId)` token byte-for-byte; a sorted read emits a `base64url("v2:" . json)` token. Both decode, and a v1 token is accepted by an explicitly-default sort, since `null` and ascending-by-id name the same ordering.
+
+**See also:** Cursor-Based Pagination, Sort, [ADR 0041](adrs/0041-sort-ordering-and-the-anchored-cursor.md).
 
 ---
 
 ### Backfill Pump
 
-A CLI command (`bin/stardust backfill`) that iterates over historical `entry_data` records in ascending `id` order and pushes them into the event stream for replication into extension tables. It maintains state via a `backfill_checkpoints` table (see [`schemas/schema_reference.md`](schemas/schema_reference.md) §5.4), allowing resumability (`--from-id`) and reports throughput metrics to stdout. Used during legacy data migration.
+**Not yet built** — [ADR 0040](adrs/0040-import-manifest-enumerates-chunks.md) still refers to it as "the (not-yet-built) Backfill Pump CLI." Planned as a CLI command (`bin/stardust backfill`) that would iterate over historical `entry_data` records in ascending `id` order and push them into the event stream for replication into extension tables, for use during legacy data migration. It would maintain state via the same `backfill_checkpoints` table the field-lifecycle work sources already use (see [`schemas/schema_reference.md`](schemas/schema_reference.md) §5.4), under its own `job_name` namespace with no retype semantics — which is why `backfill_checkpoints.source_declared_type` must stay nullable rather than required. Would allow resumability (`--from-id`) and report throughput metrics to stdout.
 
-**See also:** Dual-Write, Dead Letter Queue, `backfill_checkpoints`.
+**See also:** Dual-Write, Dead Letter Queue, `backfill_checkpoints`, [ADR 0040](adrs/0040-import-manifest-enumerates-chunks.md).
 
 ---
 
@@ -28,6 +36,15 @@ A CLI command (`bin/stardust backfill`) that iterates over historical `entry_dat
 The second query in the Two-Query Approach (Query 2). After the Paginated Probe identifies a bounded set of matching IDs, the Bounded Fetch retrieves the full row payloads via a safe `WHERE id IN (...)` clause with any necessary extension table joins. The input set is always capped at `page_size`, guaranteeing constant memory usage.
 
 **See also:** Paginated Probe, Two-Query Approach.
+
+---
+
+### Bulk Ingestion
+
+The chunked, multi-entry write path specified by [ADR 0011](adrs/0011-chunked-bulk-ingestion.md). A batch is processed in configurable chunks (default 500 entities), each committed in its own transaction — whole-batch atomicity is deliberately not offered, so a mid-batch failure leaves earlier chunks committed and later ones untouched. Two submission modes exist, split by size: **synchronous** (≤ 1,000 entities) runs inline and returns a result enumerating every chunk's outcome directly; **asynchronous** (> 1,000 entities, or an explicit submission) persists a `stardust_import_jobs` row, returns an Import Job ID immediately, and hands the work to The Reconciler's import work source rather than a dedicated daemon. Both modes accept an optional idempotency key so a caller can safely retry across a dropped connection without duplicating entries. Per [ADR 0040](adrs/0040-import-manifest-enumerates-chunks.md), the async job's manifest enumerates each chunk's outcome (`committed | failed`, plus its entity-id range) the same way the synchronous result always has; `rolled_back` is a synchronous-only outcome, since an async chunk failure is terminal for the job rather than skipped and continued past.
+
+**Aliases:** Chunked Bulk Ingestion, Async Bulk Ingest.
+**See also:** The Reconciler, `stardust_sync_queue`, Exhaustion Fallback, [ADR 0011](adrs/0011-chunked-bulk-ingestion.md), [ADR 0040](adrs/0040-import-manifest-enumerates-chunks.md).
 
 ---
 
@@ -44,7 +61,7 @@ The primary transactional storage table for all entries. Physically named `entry
 
 The pagination strategy enforced by StarDust's function API. Instead of `OFFSET`-based pagination (which degrades at depth), queries use `WHERE id > :cursor ORDER BY id ASC LIMIT {page_size} + 1`. The `+1` row determines whether a next page exists. The system never evaluates the total matched set of a query, ensuring constant-time pagination regardless of dataset size.
 
-**See also:** Paginated Probe, Two-Query Approach.
+**See also:** Paginated Probe, Two-Query Approach, Anchored Cursor, Sort.
 
 ---
 
@@ -67,7 +84,7 @@ The 4×4 lookup table governing how a JSON payload value converts between the fo
 
 ### Dead Letter Queue (DLQ)
 
-A holding queue for migration event payloads that failed processing by the dual-write consumer worker. Monitored with alerting thresholds: critical alerts fire if DLQ depth exceeds 100 messages or the oldest message age exceeds 12 hours. Failed messages are replayed via `bin/stardust dlq:replay`, which re-submits using the original `entry_id` partition key to preserve causal ordering.
+A holding queue for migration event payloads that failed processing by the dual-write consumer worker. Monitored with alerting thresholds: critical alerts fire if DLQ depth exceeds 100 messages or the oldest message age exceeds 12 hours. Failed messages are replayed by re-submitting using the original `entry_id` partition key to preserve causal ordering. Operational detail (the replay tooling itself) is out of scope here — [`legacy_data_migration.md`](legacy_data_migration.md) is a stub pending blueprint stabilization.
 
 **See also:** Dual-Write, Backfill Pump.
 
@@ -142,10 +159,12 @@ The graceful degradation behavior triggered when all extension table slot capaci
 
 ### Extension Table
 
-A 1:1 table (physically named `entry_slots_page_X`) that stores explicitly indexed fields extracted from an entry's JSON payload. Each extension table contains typed slot columns (`i_str_01`...`i_str_25`, `i_int_01`...`i_int_15`, `i_num_01`...`i_num_10`, `i_dt_01`...`i_dt_10`) and a foreign key to `entry_data` with `ON DELETE CASCADE`. New extension tables are dynamically provisioned by the Watcher when slot capacity runs low.
+A 1:1 table (physically named `entry_slots_page_X`) that stores explicitly indexed fields extracted from an entry's JSON payload, with a foreign key to `entry_data` (`ON DELETE CASCADE`). New extension tables are dynamically provisioned by the Watcher when slot capacity runs low.
+
+A page is created with **exactly the columns it indexes** — no spare, unclaimable columns — so `free` and `claimable` capacity are the same thing. How many columns that is comes from Index Headroom: at provisioning time each of the four slot families receives `max(demand, k)` indexed columns (`k = Config::$pageIndexHeadroom`, default 4), so a fresh page ordinarily carries sixteen columns. Once created, a page's shape is fixed for life — `ALTER TABLE` on a populated page is forbidden (ADR 0012).
 
 **Aliases:** Extension Page (informal).
-**See also:** Page, Slot, Vertical Schema Partitioning, `entry_slots_page_X`.
+**See also:** Page, Slot, Index Headroom, Vertical Schema Partitioning, `entry_slots_page_X`, [ADR 0042](adrs/0042-index-headroom-at-page-provisioning.md), [ADR 0043](adrs/0043-pages-provision-only-indexed-columns.md).
 
 ---
 
@@ -154,6 +173,16 @@ A 1:1 table (physically named `entry_slots_page_X`) that stores explicitly index
 The definition-layer operation that removes a Field from a Model. **Severance is synchronous and total; the payload purge is asynchronous; the registry row dies last.** `deleteField()` commits one registry transaction and returns: `stardust_fields.deleted_at` is set and `is_filterable` cleared, any live Slot is tombstoned by the two-step sequence that nulls `field_id` before flipping `status` (releasing the `RESTRICT` foreign key inside the transaction), terminal sibling checkpoint rows are removed, the schema version is bumped, and a `running` `delete_field_{id}` checkpoint is opened. From that commit the field is gone from reads, point reads, introspection, filters, new CSV export headers and inbound writes — whose payloads have the key **stripped**, not merely left unmapped, because an unregistered key would otherwise be preserved verbatim and the purge would never converge. The Reconciler then removes the key from `entry_data.fields` in bounded chunks, and the final chunk hard-deletes the `stardust_fields` row, deletes the checkpoint, and bumps the version in one transaction. Under [ADR 0034](adrs/0034-non-filterable-fields-are-json-only.md) the common case holds no slot at all. There is no undelete, and the field's name is not reusable until the purge lands. Specified by [ADR 0037](adrs/0037-field-deletion-lifecycle.md).
 
 **See also:** Model Deletion, Soft Deletion, Tombstoned Slot, Backfill Pump, The Reconciler, [ADR 0037](adrs/0037-field-deletion-lifecycle.md), [ADR 0036](adrs/0036-entry-payload-keys-are-field-names.md).
+
+---
+
+### Field Rename
+
+The definition-layer operation that changes a field's `stardust_fields.name`. Per [ADR 0036](adrs/0036-entry-payload-keys-are-field-names.md), the `entry_data.fields` JSON object is keyed by field **name** — a deliberate decision, not an accident, made because an unregistered key has no `field_id` to key by instead, and because the CSV export header, the JSON export artifact, and the async import artifact are all name-keyed contracts already written to disk by prior deploys. That makes a rename a **payload rewrite**, not a single registry UPDATE the way Model rename is. Initiating a rename sets the new `name` and the old value into `stardust_fields.previous_name` synchronously and returns; the Reconciler then backfills `entry_data.fields` for the model in chunks, riding the same `backfill_checkpoints` table and work-source shape a field retype uses ([ADR 0016](adrs/0016-field-type-change-lifecycle.md)), clearing `previous_name` in the same transaction that completes the drain.
+
+**Reads and writes bridge the rename window; filters do not.** A read falls back to `previous_name` when the new key is absent, and a write canonicalises an old-name key to the new name before persisting, but a filter naming the old field is rejected outright — a rejected write would lose data, while a rejected filter loses nothing, so loud rejection is the correct failure mode only for the filter. A field may have at most one lifecycle in flight: a rename and a retype must not overlap, or the retype backfill would read every un-migrated row as value-absent and silently null the new slot.
+
+**See also:** Field Deletion, Model, Coercion Matrix, [ADR 0036](adrs/0036-entry-payload-keys-are-field-names.md), [ADR 0016](adrs/0016-field-type-change-lifecycle.md).
 
 ---
 
@@ -173,6 +202,18 @@ A boolean metadata flag in the schema registry, set at model-field registration 
 
 ---
 
+### Index Headroom
+
+A provisioning-time setting, `k` (`Config::$pageIndexHeadroom`, default 4), that controls how many extra indexed columns get built into a new page before anything actually needs them.
+
+Here's the problem it solves. Earlier, a new page was given only as many indexed columns as were needed at that exact moment — nothing spare. That sounds efficient, but it backfired: say an operator makes three string fields filterable, one after another. The first field takes the only spare string column on the newest page. The second field, promoted moments later, finds no spare string column anywhere — so the Watcher provisions a **brand new page** just for it. The third field repeats the same thing. Three ordinary fields end up scattered across three separate pages, and a query touching all three now has to join across all three instead of just one (see Spread).
+
+Index Headroom fixes this by always building a small cushion of spare indexed columns — `k` per column type (string, integer, number, date/time) — into every new page, whether or not anything needs them yet. A fresh page ends up with sixteen indexed columns instead of one to three, so the next few fields promoted usually land on that same page rather than forcing a new one. `k` is fixed once a page is created and can't be widened afterward (ADR 0012), so raising the default only helps pages built from that point on.
+
+**See also:** Extension Table, `is_filterable`, Model-Affine Slot Reservation, [ADR 0042](adrs/0042-index-headroom-at-page-provisioning.md), [ADR 0043](adrs/0043-pages-provision-only-indexed-columns.md).
+
+---
+
 ### Index Provisioning Policy
 
 The deterministic, schema-driven rules governing which extension table slots receive B-tree indexes. Indexing decisions are tied to the `is_filterable` metadata flag: only slots mapped to fields with `is_filterable = true` are indexed at page creation time. This ensures index provisioning is auditable and never ad-hoc.
@@ -187,7 +228,7 @@ A user-defined data structure (schema) within a tenant, identified by `model_id`
 
 A model has a lifecycle: it is registered, may be renamed — one committed UPDATE, since identity is `stardust_models.id` and nothing resolves a model by name — and may be deleted (see Model Deletion). Its `id` is globally unique across tenants, and `entry_data.model_id` references it _logically_, with no foreign key: the data plane never foreign-keys into the Schema Registry.
 
-**See also:** Entry, Tenant, Schema Registry, Model Deletion, Model Compaction.
+**See also:** Entry, Tenant, Schema Registry, Model Deletion, Model Compaction, Field Rename.
 
 ---
 
@@ -195,8 +236,10 @@ A model has a lifecycle: it is registered, may be renamed — one committed UPDA
 
 The operator-initiated operation that cures Spread: it relocates a fragmented Model's live filterable Slots onto a minimal Page set, restoring the few-joins-per-query property the Slot Spread Metric ([ADR 0031](adrs/0031-slot-spread-metric.md)) measures. Mechanically each relocation is a **same-type retype** riding the unmodified field-lifecycle pipeline ([ADR 0016](adrs/0016-field-type-change-lifecycle.md)) through the coercion matrix's identity diagonal — the only new machinery is a registry-only planner that picks target pages, a page-pinned slot reservation (pin-or-fail; compaction never defers), and a CLI (`bin/stardust compact:model`) that orchestrates relocations **sequentially by default**, so at most one field at a time has filters rejected while its new slot backfills (reads fall back to the JSON payload throughout). Crash recovery is re-run: already-relocated fields are no-ops, so the operation converges idempotently. Never scheduled, never automatic — the operator pays the relocation cost per model, exactly where the metric justifies it. Specified by [ADR 0033](adrs/0033-operator-initiated-model-compaction.md).
 
+Per [ADR 0039](adrs/0039-compaction-refuses-to-plan-mid-lifecycle.md), planning itself — `--dry-run` included — refuses with `RetypeInProgressException` while any field of the target model has a running retype checkpoint. A field mid-retype holds one `tombstoned` slot and one `backfilling` slot and is invisible to the planner's population, which is deliberately the same one the ADR 0031 spread sample uses; planning through that gap would report numbers the metric then contradicts. The refusal is transient and self-clearing once the Reconciler drains the checkpoint.
+
 **Aliases:** Compaction.
-**See also:** Spread, Model-Affine Slot Reservation, Page, Slot, Tombstoned Slot, [ADR 0033](adrs/0033-operator-initiated-model-compaction.md), [ADR 0031](adrs/0031-slot-spread-metric.md), [ADR 0016](adrs/0016-field-type-change-lifecycle.md), [`runbooks/maintaining_low_spread.md`](runbooks/maintaining_low_spread.md).
+**See also:** Spread, Model-Affine Slot Reservation, Page, Slot, Tombstoned Slot, [ADR 0033](adrs/0033-operator-initiated-model-compaction.md), [ADR 0031](adrs/0031-slot-spread-metric.md), [ADR 0039](adrs/0039-compaction-refuses-to-plan-mid-lifecycle.md), [ADR 0016](adrs/0016-field-type-change-lifecycle.md), [`runbooks/maintaining_low_spread.md`](runbooks/maintaining_low_spread.md).
 
 ---
 
@@ -283,9 +326,9 @@ An optional pre-cutover validation step during legacy data migration (gate 3 of 
 
 ### Slot
 
-A typed column within an extension table (e.g., `i_str_01`, `i_int_15`, `i_num_03`, `i_dt_07`). Each slot has a fixed data type (`TEXT` for string slots per ADR `0030`, or `BIGINT`, `DOUBLE`, `DATETIME`) and, when occupied, is mapped to a specific **filterable** model field via the schema registry — non-filterable fields are JSON-only and never occupy a slot (ADR `0034`). A page may still carry unindexed columns beyond current filterable demand; these are unassignable inventory, not slots held by non-filterable fields. The total number of available slots across all pages determines global capacity.
+A typed column within an extension table (e.g., `i_str_01`, `i_int_15`, `i_num_03`, `i_dt_07`). Each slot has a fixed data type (`TEXT` for string slots per ADR `0030`, or `BIGINT`, `DOUBLE`, `DATETIME`) and, when occupied, is mapped to a specific **filterable** model field via the schema registry — non-filterable fields are JSON-only and never occupy a slot (ADR `0034`). A page's column set equals its indexed set exactly — there are no spare, unindexed columns sitting on a page — so every column on a page is a slot. The total number of available slots across all pages determines global capacity.
 
-**See also:** Extension Table, Page, `is_filterable`, Schema Registry, Spread.
+**See also:** Extension Table, Page, `is_filterable`, Schema Registry, Spread, Index Headroom.
 
 ---
 
@@ -309,12 +352,25 @@ Do not confuse this with `stardust_fields.deleted_at` or `stardust_models.delete
 
 ---
 
+### Sort
+
+The read-path ordering parameter added by [ADR 0041](adrs/0041-sort-ordering-and-the-anchored-cursor.md). `EntryQuery` and `SearchRequest` each carry an appended sort parameter; `null` means `entry_data.id ASC`, the ordering every read had before this ADR, so no existing caller or cursor is affected by its addition. A sort spec names exactly one of three targets: `Id`, `CreatedAt`, or `Field` (a registered field's indexed slot column). Sorting by `Id` or `CreatedAt` can walk straight down an existing index in the requested order — cheap, at any page depth. Sorting by `Field` cannot, because the compiled query reads from `entry_data` first, so MySQL falls back to a **filesort**: instead of reading rows already in order off an index, it gathers all the matching rows first and then sorts that whole set as a separate step. (This is MySQL's own term — it shows up as `Using filesort` in `EXPLAIN` output, and despite the name it doesn't necessarily touch disk; for a small result it sorts in memory.) A field sort still respects the two-query bound — nothing unbounded is ever materialized — but it costs a full sort pass over the filtered set on every page, rather than a cheap index walk. `entry_data.id` is always appended as the implicit tiebreak in the same direction as the requested sort, which is what keeps every ordering total and every Anchored Cursor stable. Sortability on a given field is a driver capability — `EntrySearchInterface::supportsSortOn(int $fieldId): bool` mirrors `supportsFilterOn()` but is a separate method, since an external driver may index a field for matching without making it orderable. Sort does **not** enter the QueryFilter wire format; it is a parameter on the read DTOs only, per the 2026-05-02 confirmation that sort belongs to the consumer API layer.
+
+**Aliases:** SortSpec.
+**See also:** Anchored Cursor, Cursor-Based Pagination, Pre-Flight Rejection, `EntrySearchInterface`, [ADR 0041](adrs/0041-sort-ordering-and-the-anchored-cursor.md).
+
+---
+
 ### Spread
 
-The number of distinct extension Pages a single Model's live filterable Slots occupy. Because the query compiler emits one `INNER JOIN entry_slots_page_X` per distinct page a filtered query references, spread is a direct constant-factor cost on filtered reads: a model whose filterable fields are scattered across three pages pays two extra index range-scans versus the same model packed onto one. Spread is an emergent consequence of Immutable Extension Page DDL ([ADR 0012](adrs/0012-immutable-extension-page-ddl.md)) combined with the global-oldest slot-reservation order — incremental field growth and relocations (retype / filterability promotion) land a model's slots on whichever page had a free slot. The advisory **Slot Spread Metric** ([ADR 0031](adrs/0031-slot-spread-metric.md)) measures it per `(tenant, model)` as **excess pages** = pages occupied − theoretical minimum (the fewest pages the model's filterable fields could occupy given per-family slot ceilings), emitting `spread_sampled` (every sample) and `high_spread_model` (when excess crosses a configurable threshold) on `source: registry`. The metric never blocks or rewrites anything; remediation is operator-initiated. Prevention is Model-Affine Slot Reservation; the cure for already-spread models is Model Compaction ([ADR 0033](adrs/0033-operator-initiated-model-compaction.md)).
+How many separate extension Pages a single Model's live filterable Slots are scattered across. This matters because every extra page a filtered query touches costs one more join — a model whose fields sit on three pages is slower per query than the same model packed onto one page. Spread isn't a bug; it's a side effect of two things working as designed: a page can never be altered once created (see Page), and a new slot is always handed out from whichever page happens to have room first. A model's fields can end up scattered simply through the ordinary process of growing over time.
+
+StarDust measures this with the advisory **Slot Spread Metric** (ADR 0031): for each model, **excess pages** = pages the model actually occupies − the fewest pages it could theoretically fit on. That "fewest possible" number used to be a simple division, back when every page had the exact same number of columns of each type. It no longer is one, now that pages can be built with different amounts of room (see Index Headroom) — the fewest-pages number has to be worked out by looking at the model's actual pages and how much real spare room each one has, not by a fixed formula (ADR 0044). One side effect: this number can shift on its own, with nothing about the model itself changing, if some other model sharing the same page claims or frees up room there.
+
+The metric never blocks or rewrites anything on its own — it is purely advisory, and fixing a spread-out model is something an operator chooses to do (see Model Compaction). Model-Affine Slot Reservation is the preventive half: it tries to keep a model's new slots on pages it already occupies, so spread doesn't happen in the first place.
 
 **Aliases:** Slot Spread, Excess Pages.
-**See also:** Page, Slot, Model, Model-Affine Slot Reservation, Model Compaction, The Watcher, [ADR 0031](adrs/0031-slot-spread-metric.md), [ADR 0012](adrs/0012-immutable-extension-page-ddl.md).
+**See also:** Page, Slot, Model, Model-Affine Slot Reservation, Model Compaction, Index Headroom, The Watcher, [ADR 0031](adrs/0031-slot-spread-metric.md), [ADR 0012](adrs/0012-immutable-extension-page-ddl.md), [ADR 0044](adrs/0044-theoretical-minimum-pages-from-real-capacity.md).
 
 ---
 
@@ -328,7 +384,7 @@ The physical MySQL table name for the Chronicler's async export job queue (see [
 
 ### `stardust_reconciler_dlq`
 
-The physical MySQL table name for the Reconciler's per-row poison-pill quarantine (see [`schemas/schema_reference.md`](schemas/schema_reference.md) §5.3). One row per quarantined entry, distinguished by a `source` discriminator (`sync_queue` or `bulk_import`) so the two Reconciler workloads share one operator surface. Replay is operator-initiated only (`bin/stardust reconciler:dlq:replay`); there is no automatic retry and no automatic TTL. Fully specified by [ADR 0018](adrs/0018-reconciler-poison-pill-semantics.md). Distinct from the migration **Dead Letter Queue (DLQ)** above, which holds dual-write replication failures rather than indexed-materialization failures.
+The physical MySQL table name for the Reconciler's per-row poison-pill quarantine (see [`schemas/schema_reference.md`](schemas/schema_reference.md) §5.3). One row per quarantined entry, distinguished by a `source` discriminator (`sync_queue` or `bulk_import`) so the two Reconciler workloads share one operator surface. Replay is operator-initiated only, via a dedicated CLI replay command; there is no automatic retry and no automatic TTL. Fully specified by [ADR 0018](adrs/0018-reconciler-poison-pill-semantics.md). Distinct from the migration **Dead Letter Queue (DLQ)** above, which holds dual-write replication failures rather than indexed-materialization failures.
 
 **See also:** The Reconciler, Dead Letter Queue, [ADR 0018](adrs/0018-reconciler-poison-pill-semantics.md).
 
