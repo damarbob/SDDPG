@@ -103,6 +103,8 @@ The five work sources that emit it — sync-queue, import-job, retype, rename an
 
 It is distinct from `capacity_wait` on purpose, though both mean "claimed, rolled back, backing off". `capacity_wait` means the engine is out of slot inventory and needs the Watcher to provision; `lock_wait` means another transaction held a row and will let go. Sharing a name would make sync-queue depth stop being the clean signal of filterable backfill debt that ADR `0007` designates it.
 
+- `tick` (ADR `0048`, added 2026-09-15): `tick_started`, `tick_complete`, `tick_skipped`. The bounded combined-tick run's own trace boundary — one run mints one `correlation_id` and emits `tick_started` / `tick_complete` under it, with `tick_skipped` when the run declines to start at all because another process already holds the Watcher's or the Liberator's pid file. Deliberately not a joining id: the Watcher, Liberator and Reconciler it composes each mint their own per-tick ids as they already do under a persistent daemon, so a `tick` run's log groups by timestamp proximity rather than by a shared `correlation_id` — see `docs/observability.md`. Like `source: registry`, there is no `blueprints/` document for this source yet, so the blueprint-update rule below is unsatisfiable for it too — recorded rather than fixed, on the same precedent.
+
 Adding a new event name requires a blueprint update. Free-form `printf`-style log lines are not permitted.
 
 Two notes on enforcement, recorded 2026-08-24 while adding the ADR `0038` pair.

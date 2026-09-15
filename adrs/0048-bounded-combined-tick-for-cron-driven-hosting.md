@@ -1,0 +1,77 @@
+# 0048 - Bounded Combined Tick For Cron-Driven Hosting
+
+**Status:** Proposed
+**Created:** 2026-09-15
+
+## Context
+
+ADR [`0027`](0027-persistent-process-daemon-execution-model.md) pinned StarDust v1 to a single daemon execution model — four persistent processes — and explicitly deferred a cron-driven `--once` mode rather than foreclosing it, naming the residual work: "a per-daemon bounded-pass entry point with a chunk-count or time budget; Chronicler artifact-file append-correctness on resume; and a non-stdout logging sink suitable for cron environments." Two of those three are now in a position to be spent: the Chronicler's resume path is closed and byte-verified by ADR [`0047`](0047-the-export-resume-anchor-is-the-artifact-plus-its-byte-offset.md), and every daemon already checkpoints to the database per ADR [`0015`](0015-database-as-sole-daemon-coordination-point.md) — a bounded pass is, structurally, indistinguishable from a daemon that crashes and restarts, exactly as 0027 predicted.
+
+The motivating constraint is connections, not merely "shared hosting doesn't have cron access" — it usually does. A cPanel-class account with real MySQL 8.0.13+ and a crontab is otherwise a supported target under 0027's own host-capability list; what it cannot sustain is **four permanently-resident daemon processes holding four MySQL connections continuously**, when the account's `max_user_connections` is commonly capped in the low tens and shared with the site's own request traffic. One process making a bounded number of short-lived connections is a materially different ask than four processes holding connections forever.
+
+Three things already reduce the residual work below what 0027 estimated:
+
+- `ext-pcntl` is already optional (`SignalShutdownSignal` degrades to inert without it; `FlagFileShutdownSignal` exists for exactly this host).
+- `Reconciler::tick()` is already exactly one bounded round — one chunk per work source, six sources, return — so it needed no new bounding, only a way to report what happened.
+- `PidFileGuard` is a non-blocking `flock`, which works on shared hosting, with a caveat (NFS-backed home directories) that belongs in the deployment docs rather than in this decision.
+
+What does not reduce is the Chronicler: `ExportJobProcessor::process()` runs a claimed job to completion inside one `while (true)`, with no point at which it can hand control back before the job finishes. A multi-GB export would make any time budget meaningless if the Chronicler were folded into a bounded run.
+
+## Decision
+
+**Ship a bounded, budget-limited combined run — `StarDust::tick()` / `bin/stardust tick` — composing the Watcher, Liberator and Reconciler over one connection, and deliberately excluding the Chronicler.**
+
+**Commitment 1 — one process, one connection, three daemons, a fixed and documented order.** The order is a design decision, not an implementation detail, on the same reasoning that makes the Reconciler's own work-source order observable-and-therefore-append-only (ADR [`0008`](0008-singleton-watcher-multi-worker-reconciler.md)):
+
+1. Take the Watcher's pid-file lock, then the Liberator's (Commitment 3 explains why this run takes them itself). Contention on either stops the run before either daemon is touched.
+2. Optionally force both Watcher advisory samplers once (Commitment 4).
+3. Run the Watcher once, unconditionally, before the round loop — a round's `CAPACITY_WAIT` can only be cleared by the Watcher, so provisioning must have a chance to run before the Reconciler can possibly need it.
+4. Loop: sweep one Liberator batch, then run one Reconciler round, re-running the Watcher if the round reported `CAPACITY_WAIT`. The Liberator runs before the Reconciler **within** a round so a slot it reclaims `tombstoned → free` is visible to whatever the Reconciler reserves later in the same round.
+5. A round that swept nothing and found the Reconciler fully idle stops the loop. This is load-bearing, not an optimization: without it, a quiet minute is roughly fifty seconds of continuous idle polling — the antisocial behaviour this deployment mode exists to avoid.
+
+**Commitment 2 — the budget is the lower of two ceilings, less a margin, and a round always completes.** The operator configures a budget in seconds; the SAPI's `max_execution_time` (nonzero only on a web-facing SAPI — the CLI SAPI's own default is empirically `0`) is the second ceiling, and the smaller of the two wins after subtracting a fixed margin, so a cron- or URL-driven run cannot itself get killed mid-round by the timeout it is trying to respect. `set_time_limit(0)` is attempted first and its failure tolerated. The budget is checked only **between** rounds, never mid-round, so a resolved budget of zero or less is not an error condition — it means "complete exactly one round, then stop," which the loop honours with no special case. Every chunk inside a round already commits or rolls back as a unit (pre-existing daemon discipline), so being killed mid-round — by the host, not by this budget — was already safe before this ADR.
+
+**Commitment 3 — this run takes its composed daemons' own singleton locks, not a lock of its own.** The Watcher and the Liberator are both strict singletons (ADR `0008`, ADR [`0009`](0009-tombstone-based-slot-eviction.md)); this run composes both, so it acquires **their** pid-file locks (`watcher.pid`, then `liberator.pid`) via a non-blocking variant of the existing `PidFileGuard` that reports contention rather than throwing. This is a deliberate, narrow exception to "the CLI enforces singletons" (the standing rule for the four persistent daemons): `StarDust::tick()` is a facade method a consumer can call from their own `cron.php` or a `fastcgi_finish_request()` post-response driver, and that caller cannot be trusted to take the lock itself, so the lock has to live inside the composed run. Contention on either lock is not an error: the run reports a distinct "skipped" outcome and touches the database not at all, because an overlapping cron firing — or a persistent `watcher`/`liberator` process already running on the same installation — is expected, routine behaviour, not a failure a cron mail alert should wake anyone for.
+
+**Commitment 4 — advisories need an explicit, separate opt-in.** The Watcher's cardinality (ADR [`0019`](0019-cardinality-based-selectivity-advisory.md)) and spread (ADR [`0031`](0031-slot-spread-metric.md)) advisories are gated by an in-memory, process-local due-check that phase-randomizes its first fire and then re-schedules on every subsequent tick. That schedule cannot survive a process that exits after every invocation: a fresh Watcher on every bounded run would never get past its first (always-false) check, and the advisories would simply never fire under this deployment mode. Rather than persist the schedule (a larger change, left open — see Consequences), this run accepts an explicit flag that forces both samplers once, unconditionally, bypassing the due-check entirely. The operator schedules it from a **separate**, once-daily crontab line, not from every invocation of the primary tick.
+
+**Commitment 5 — one run is one failure domain.** An exception from any composed daemon propagates out of the run uncaught, ending the whole run, unlike three independently-supervised persistent processes where one daemon crashing does not touch the other two. This matches the "fail loudly on unexpected error" policy every daemon here already has under ADR `0027`, and it keeps the event vocabulary — and the operator's mental model of what one cron failure means — small. Cron's own mail-on-stderr is the intended operator signal.
+
+**Commitment 6 — the Chronicler is excluded, not merely deferred silently.** `ExportJobProcessor::process()` has no yield point; composing it into a bounded run would either make the budget a lie (the job keeps running past it) or require building the cooperative yield first. That yield's own precondition — a verified, byte-accurate resume anchor rather than a trusted cursor — is exactly what ADR `0047` closed, which is why this ADR could not have shipped correctly before it: a yield that requeues a job mid-export on every tick boundary, built on the pre-0047 resume path, would have manufactured 0047's data-loss case deliberately, on a schedule, rather than by accident. The yield itself remains future work (tracked in the project roadmap); until it lands, async exports on this deployment mode are unsupported, and the documentation says so in those words rather than leaving it to be discovered.
+
+### New events
+
+`tick` is a new source. Three events: `tick_started` (`budget_seconds`, `clamped`, `advisories`), `tick_complete` (`rounds`, `elapsed_seconds`, `budget_seconds`, `stop_reason` — one of `idle` | `budget_spent` | `shutdown` | `lock_contended`), `tick_skipped` (`contended_pid_file` — `watcher` or `liberator`). One run mints one `correlation_id` shared by all three of its own events; it is deliberately **not** threaded into the Watcher, Liberator or Reconciler it composes, each of which continues minting its own per-tick id exactly as it does under a persistent daemon. A `tick` run's log therefore does not join end-to-end under one id — it groups by timestamp proximity within the run instead. This is a known, accepted gap rather than an oversight (see Consequences), on the same footing as the sync-queue's non-joining tick events under ADR `0020`.
+
+## Consequences
+
+**Positive:**
+
+- Unlocks a real deployment tier — the MySQL-8 slice of cron-only shared hosting — that ADR `0027` explicitly left open rather than foreclosed, spending exactly the residual work it predicted for three of the four daemons.
+- The facade-first design (`StarDust::tick()`, with the CLI as a thin wrapper) serves a caller `bin/stardust` cannot reach: a host with no shell but scheduled URL fetches. The same facade is free groundwork for a `fastcgi_finish_request()` post-response driver, should a future ADR want one.
+- No daemon's per-round or per-chunk behaviour changed. `Reconciler::tickOne()`'s per-source contract, `Liberator`'s sweep-batch semantics, and the Watcher's provisioning arithmetic are all reused unmodified — this ADR composes existing bounded units rather than inventing new ones.
+- The singleton-lock design (Commitment 3) closes a concern the shared-hosting roadmap item had originally raised against the Liberator specifically — "a URL-driven or post-response Liberator has no flock protection" turns out not to be true of this design, since the combined run takes the Liberator's own pid-file lock regardless of what invoked it.
+
+**Negative:**
+
+- Exports are unsupported on this deployment mode until the Chronicler's cooperative yield lands (Commitment 6). This is a real capability gap for an application that needs both a cron-only host and async exports, not merely a documentation caveat.
+- The advisory-schedule workaround (Commitment 4) is a real, ongoing operator obligation — a second crontab line — rather than the advisories simply working the way they do under a persistent Watcher. Persisting the schedule so this is unnecessary is future work, tracked in the project roadmap rather than solved here; solving it well needs a decision about where the schedule lives (a new singleton row, piggybacking on `stardust_schema_version`, or elsewhere) that this ADR did not want to make as a side effect of shipping the tick itself.
+- A `tick` run's events do not join end-to-end under one `correlation_id` (see New events) — an operator tracing one run's full behaviour groups by timestamp, not by id, which is a real ergonomic gap against the correlation-id discipline the rest of the engine has. Threading the run's id into all three composed daemons was considered and rejected for this ADR: each daemon's constructor already accepts a per-invocation id at exactly one seam (`tickOne(string $chunkCorrelationId)`, `sweep($slot, $correlationId)` generated internally, `Watcher::tick()`'s internally-generated id), and forcing all three seams to accept an externally-supplied id would touch the standalone-daemon call sites too, widening this ADR's blast radius for a tracing convenience.
+- One more small exception to "the CLI enforces singletons" (Commitment 3) that a future reader of `src/Daemon/CLAUDE.md` has to learn as a named exception rather than infer from the rule.
+
+**Rejected alternatives:**
+
+- **Isolate each composed daemon's failure** (an exception from the Watcher does not stop the Liberator or Reconciler from getting their turn). Rejected: it would mean three independent error-handling paths inside one run, a larger and more surprising event vocabulary, and it does not match how a genuine crash is already handled today — a persistent daemon that throws exits the process and stops helping until restarted, and this run's failure mode should read the same way to an operator.
+- **A third `tick.pid` file instead of taking the Watcher's and Liberator's own locks.** Rejected: it would let two ticks run concurrently as long as neither individually contended with a persistent `watcher`/`liberator` process, which is exactly the race this ADR needs to prevent — two ticks racing each other on the same slot reclamation is the same hazard as two Liberators racing.
+- **Always burn the full budget rather than exiting on an idle round.** Rejected as directly contrary to the reason this ADR exists: burning fifty seconds of continuous idle polling every minute is the antisocial daemon behaviour that motivated a bounded run in the first place.
+- **Build the Chronicler's cooperative yield as part of this ADR, so the tick is complete on day one.** Rejected for sequencing: the yield's precondition (ADR `0047`) landed the same day as this work started, leaving no time to design and verify the yield itself with the same care 0047 required, and shipping the three-daemon tick now is strictly better than shipping nothing while the fourth is finished. Tracked as an explicit follow-up rather than folded in under time pressure.
+
+## Related
+
+- [ADR `0027`](0027-persistent-process-daemon-execution-model.md) — The ADR this one ships the deferred `--once` mode of, for three of the four daemons. Carries a dated pointer to this ADR.
+- [ADR `0047`](0047-the-export-resume-anchor-is-the-artifact-plus-its-byte-offset.md) — Closes the resume-correctness precondition Commitment 6 needs before a Chronicler cooperative yield can be built safely.
+- [ADR `0015`](0015-database-as-sole-daemon-coordination-point.md) — The externalized-state property that makes a bounded pass structurally equivalent to a crash-and-restart.
+- [ADR `0008`](0008-singleton-watcher-multi-worker-reconciler.md) — Singleton Watcher / multi-worker Reconciler contract this run's per-daemon round shape reuses unmodified.
+- [ADR `0009`](0009-tombstone-based-slot-eviction.md) — The Liberator singleton guarantee Commitment 3 preserves across this deployment mode.
+- [ADR `0019`](0019-cardinality-based-selectivity-advisory.md), [ADR `0031`](0031-slot-spread-metric.md) — The two advisories Commitment 4's explicit opt-in exists to keep reachable under this mode.
+- [ADR `0020`](0020-structured-logging-mandate.md) — Event vocabulary this ADR's `tick` source extends.

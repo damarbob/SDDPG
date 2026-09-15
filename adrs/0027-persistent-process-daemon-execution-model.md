@@ -19,12 +19,14 @@ StarDust v1 supports a single daemon execution model: **persistent background pr
 
 A cron-driven `--once` / single-pass invocation mode is **deliberately deferred, not architecturally foreclosed**. The externalization of all daemon state to the database ([ADR `0015`](0015-database-as-sole-daemon-coordination-point.md)) and the universal cursor-checkpointing pattern across the four daemons mean a future `--once` mode can be added without disturbing any path, contract, or invariant — the architectural cost of adopting it later is small and localized. If a future ADR adopts it, the residual work is mechanical: a per-daemon bounded-pass entry point with a chunk-count or time budget; Chronicler artifact-file append-correctness on resume; and a non-stdout logging sink suitable for cron environments.
 
+> **Extended 2026-09-15 by ADR [`0048`](0048-bounded-combined-tick-for-cron-driven-hosting.md):** the `--once` mode this section deferred is shipped, for three of the four daemons. `StarDust::tick()` / `bin/stardust tick` runs the Watcher, Liberator and Reconciler as one bounded pass per invocation, closing the "Paid shared hosting with cron only" row below to **Supported (MySQL-8 slice; see ADR 0048)** rather than "Unsupported in v1" — the residual work this section predicted (a bounded-pass entry point with a time budget) is exactly what 0048 built, and it needed no change to any existing path, contract, or invariant, matching this section's own prediction. Two things from that prediction did NOT land: the Chronicler stays excluded (ADR 0025's resume anchor, closed by ADR 0047, was a precondition for the cooperative yield a bounded Chronicler pass needs, and that yield is not yet built — tracked in the project roadmap), and logging stays stdout-only rather than gaining a dedicated non-stdout cron sink (unneeded in practice: cron's own output redirection is sufficient, per ADR 0048's deployment guidance). The tier table and requirements list below are otherwise unchanged and still describe the **persistent-process** deployment mode correctly; ADR 0048 is the document for the mode this note describes.
+
 ### Supported deployment tiers
 
 | Tier | Verdict | Notes |
 | :--- | :--- | :--- |
 | Free shared hosting (no shell, no cron, no persistent processes) | **Unsupported** | Structurally cannot run the daemon set. |
-| Paid shared hosting with cron only | **Unsupported in v1** | Awaits a future `--once`-mode ADR. |
+| Paid shared hosting with cron only | **Unsupported in v1 for this (persistent-process) mode** | See the pointer above: a MySQL-8 slice of this tier is supported under the separate bounded-tick mode ADR `0048` ships. |
 | VPS (systemd, supervisor, or equivalent process supervisor) | **Supported — reference deployment** | Each daemon runs as a managed long-running process. |
 | Containerized deployment (Docker Compose, Kubernetes, ECS, etc.) | **Supported — recommended for production at scale** | One container per daemon. The Reconciler scales horizontally per [ADR `0008`](0008-singleton-watcher-multi-worker-reconciler.md); the Watcher MUST be pinned to a single replica, with the in-DB `GET_LOCK` advisory lock as the safety net. The Chronicler requires a shared volume for export artifacts. |
 
@@ -79,3 +81,4 @@ The following documents are updated as part of this ADR landing:
 - [ADR `0023`](0023-minimum-mysql-version.md) — Minimum supported MySQL version.
 - [ADR `0025`](0025-chronicler-failure-semantics.md) — Chronicler failure semantics (lease / heartbeat / re-claim — already makes export jobs resumable).
 - [ADR `0026`](0026-framework-neutral-composer-packaging.md) — Framework-neutral Composer packaging (defines the `bin/stardust` CLI surface this ADR pins the execution model for).
+- [ADR `0048`](0048-bounded-combined-tick-for-cron-driven-hosting.md) — Ships the `--once`-shaped mode this ADR deferred, for three of the four daemons. See the dated pointer above.
