@@ -34,6 +34,8 @@ UPDATE entry_slots_page_X SET i_str_XX = NULL WHERE entry_id > ? ORDER BY entry_
 
 This decision **refines ADR [`0009`](0009-tombstone-based-slot-eviction.md)**: it overrides the `WHERE tenant_id = ? AND id > ?` predicate in 0009 §Decision step 3 only. Every other commitment of ADR 0009 — the sever → tombstone → sweep → reclaim lifecycle, per-chunk `sweep_cursor_id` checkpointing in the same transaction, the singleton model, the deadlock/gap policy, and `tombstoned_at ASC` ordering — remains in force unchanged. ADR 0009 is **not** superseded; per the document-precedence rule "on conflict between two ADRs, the newer ADR wins," this ADR governs the sweep-predicate question alone, and ADR 0009's body is left intact per the append-only ADR convention.
 
+> **Amended 2026-09-15 by ADR [`0049`](0049-multi-worker-liberator-excluded-per-page.md):** "the singleton model … remains in force unchanged" is no longer accurate — 0049 multi-workers the Liberator at page-table granularity. Nothing else in this sentence changes: the sweep-predicate question this ADR governs is orthogonal to process count, and this ADR's own Decision and Consequences are otherwise untouched by 0049.
+
 Because ADRs are the authoritative source of truth and the Architecture Blueprint is a synthesis beneath them ([implementation_phases.md §Document Precedence](../implementation_phases.md)), this ADR also governs over the Architecture Blueprint §1.2/§2.1.3 wording. The Blueprint is updated to carve out the Liberator tombstone sweep as a documented exception that cites this ADR; the §1.2 isolation invariant remains in force for every other query, daemon sweep, and export job.
 
 ## Consequences

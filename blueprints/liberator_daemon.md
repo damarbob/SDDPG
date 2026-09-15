@@ -12,7 +12,7 @@ The Watcher and Reconciler each have such a blueprint ([`watcher_reconciler_daem
 
 ## 2. Scope
 
-- **The Liberator**: A singleton PHP CLI daemon (`bin/stardust liberator`) that:
+- **The Liberator**: A multi-worker PHP CLI daemon (`bin/stardust liberator`, since [ADR 0049](../adrs/0049-multi-worker-liberator-excluded-per-page.md)) that:
   - Polls `stardust_slot_assignments` for rows in `status = 'tombstoned'`.
   - Sweeps each tombstoned slot via chunked `UPDATE entry_slots_page_X SET <slot_column> = NULL WHERE id > ? LIMIT 500` (no `tenant_id` predicate — the slot column is single-owner by `UNIQUE (page_id, slot_column)`; see AC#3 and [ADR 0029](../adrs/0029-liberator-sweep-omits-tenant-predicate.md)).
   - Commits `sweep_cursor_id` advancement in the **same transaction** as the chunk's `UPDATE` (per [ADR 0009](../adrs/0009-tombstone-based-slot-eviction.md)).
@@ -24,7 +24,7 @@ The Watcher and Reconciler each have such a blueprint ([`watcher_reconciler_daem
 
 ## 3. Non-Goals
 
-- **Horizontal scaling.** [ADR 0009](../adrs/0009-tombstone-based-slot-eviction.md) fixes the Liberator as a singleton. This blueprint inherits that constraint and does not attempt to design a multi-worker variant.
+- ~~**Horizontal scaling.**~~ Reversed by [ADR 0049](../adrs/0049-multi-worker-liberator-excluded-per-page.md): the Liberator is multi-worker, excluded at page-table granularity via `GET_LOCK`. See AC#1/AC#2/AC#10/AC#11 below and §5's key decisions, both updated accordingly.
 - **Tombstone authorship.** The Liberator does not create tombstones. The API (field deletion, demotion) and the schema-registry retype handler ([ADR 0016](../adrs/0016-field-type-change-lifecycle.md)) commit `assigned → tombstoned` transitions. The Liberator only consumes them.
 - **Capacity accounting.** The Watcher's "is the global capacity below threshold?" computation is the Watcher's responsibility ([`watcher_reconciler_daemons.md`](watcher_reconciler_daemons.md)). The Liberator's `tombstoned → free` transition feeds that computation but does not perform it.
 - **DLQ semantics for failed nullifications.** A nullification chunk either succeeds, deadlocks (retry path), or surfaces as a `sweep_gap_flagged` event for operator inspection. There is no Liberator equivalent to the Reconciler's per-row poison-pill DLQ ([ADR 0018](../adrs/0018-reconciler-poison-pill-semantics.md)) — `UPDATE ... SET col = NULL` is idempotent and has no per-row failure mode that a DLQ would meaningfully capture.
@@ -32,10 +32,10 @@ The Watcher and Reconciler each have such a blueprint ([`watcher_reconciler_daem
 
 ## 4. Acceptance Criteria
 
-### Singleton enforcement
+### Page-level exclusion (multi-worker since ADR 0049)
 
-1. Starting a second Liberator instance against the same database fails fast with a clear error (PID file, OS-level process lock, or advisory lock collision identical to the Watcher's mechanism per [ADR 0008](../adrs/0008-singleton-watcher-multi-worker-reconciler.md)).
-2. The Liberator's PID file or lock identity is logged on startup as a `sweep_started`-class event with `correlation_id` set to a per-process UUID (used as the cycle correlation for all subsequent events from this process).
+1. Multiple Liberator instances may run concurrently against the same database with no PID file, OS-level process lock, or startup-time collision of any kind — [ADR 0008](../adrs/0008-singleton-watcher-multi-worker-reconciler.md)'s singleton mechanism applies to the Watcher only. Instead, two workers never sweep the same `entry_slots_page_N` table at the same time: each worker takes a `GET_LOCK('stardust_sweep_page_{pageId}', 0)` advisory lock before sweeping a slot on that page, and skips the slot for this cycle on contention rather than waiting. See [ADR 0049](../adrs/0049-multi-worker-liberator-excluded-per-page.md).
+2. Each worker mints its own per-process `worker_identity` (`host:pid:uuid`), which rides every event it emits, since the event stream alone can no longer distinguish which of N processes did what. `correlation_id` remains a per-*cycle* UUID as before — it does not change meaning, and does not correlate across workers.
 
 ### Sweep correctness
 
@@ -52,16 +52,16 @@ The Watcher and Reconciler each have such a blueprint ([`watcher_reconciler_daem
 
 ### Sweep ordering
 
-10. Tombstoned slots are processed in `tombstoned_at ASC` order, tie-broken by `(page_id, slot_column)`. Restart yields the same processing order against the same registry state.
+10. Tombstoned slots are processed in `tombstoned_at ASC` order, tie-broken by `(page_id, slot_column)`. Restart yields the same processing order against the same registry state. **Since ADR 0049 this describes the *candidate* order a single worker's `loadBatch()` walks, not a global claim order across workers** — every worker's batch read runs the same query with no claim taken (§2 AC#1), so two workers loading concurrently see the same candidate list in the same order, but which one actually *sweeps* a given slot depends on which reaches that slot's page-lock acquisition first. Cross-worker execution order is therefore not deterministic; within one worker's own walk of its own batch, it still is.
 
 ### Observability
 
-11. The Liberator emits one `sweep_started` event per polled batch (set of tombstoned slots claimed for this cycle), one `sweep_chunk` event per chunk commit, one `sweep_complete` event per slot transitioned to `free`, one `deadlock_retry` event per retry, and one `sweep_gap_flagged` event per gap annotation. All events carry `correlation_id` (per-cycle UUID) and `slot_assignment_id`. Per [ADR 0020](../adrs/0020-structured-logging-mandate.md), events are NDJSON to stdout — no other event names are emitted.
+11. The Liberator emits one `sweep_started` event per polled batch **that claimed at least one slot** (a batch every one of whose slots is contended by other workers emits nothing at all — see §4 Idle behavior), one `sweep_chunk` event per chunk commit, one `sweep_complete` event per slot transitioned to `free`, one `deadlock_retry` event per retry, and one `sweep_gap_flagged` event per gap annotation. All events carry `correlation_id` (per-cycle UUID), `slot_assignment_id`, and — since [ADR 0049](../adrs/0049-multi-worker-liberator-excluded-per-page.md) — `worker_identity`. **`sweep_started` fires once at the END of a cycle, not the start**, and additionally carries `slots_claimed` / `slots_contended` alongside `batch_size`: those tallies are unknowable before the whole batch has been walked one slot at a time (§2 AC#1), so the pre-0049 "announce the batch, then sweep it" ordering is no longer possible without either pre-acquiring every claimable slot's page lock up front (which would let one worker monopolize a whole multi-page batch) or reporting incomplete tallies. Per [ADR 0020](../adrs/0020-structured-logging-mandate.md), events are NDJSON to stdout — no other event names are emitted.
 12. The structured-log payload of `sweep_chunk` includes `rows_nullified`, `chunk_elapsed_ms`, and the new `sweep_cursor_id`. Operators can compute sweep throughput from these alone — **from `rows_nullified`, specifically.** Once a pass has taken a gap the reported `sweep_cursor_id` is pinned (AC#16) and repeats unchanged on every subsequent chunk, because it names the value actually committed to the registry rather than where the sweep is reading. A constant cursor alongside a non-zero `rows_nullified` therefore means "progressing, with an unresolved gap", not "stalled".
 
 ### Idle behavior
 
-13. When no rows in `stardust_slot_assignments` are `status = 'tombstoned'`, the Liberator sleeps for the configured idle interval (default 10s) and re-polls. The idle path emits no events to avoid log spam — only `sweep_started` (with a populated batch) generates output.
+13. When no rows in `stardust_slot_assignments` are `status = 'tombstoned'`, the Liberator sleeps for the configured idle interval (default 10s) and re-polls. The idle path emits no events to avoid log spam — only a cycle that actually claimed at least one slot generates output. **Since ADR 0049 this extends to a non-empty batch every one of whose candidate slots is contended by another worker**: the worker still emits nothing, because from its own point of view it made no progress this cycle, even though `stardust_slot_assignments` is not actually empty of tombstoned rows.
 
 ### Slot recycling
 
@@ -106,7 +106,7 @@ flowchart TD
 
 **Key decisions:**
 
-- The Liberator never coordinates with another Liberator — singleton enforcement is invariant per [ADR 0009](../adrs/0009-tombstone-based-slot-eviction.md). The sweep workload is IO-bound; horizontal scaling delivers no throughput benefit and degrades the per-slot `sweep_cursor_id` semantics.
+- **Since [ADR 0049](../adrs/0049-multi-worker-liberator-excluded-per-page.md), the Liberator coordinates with other Liberators at page-table granularity** — no process singleton, but never two workers sweeping the same `entry_slots_page_N` table at once, via `GET_LOCK`. [ADR 0009](../adrs/0009-tombstone-based-slot-eviction.md)'s IO-bound observation still holds *within one page*: horizontal scaling delivers no throughput benefit there, and per-slot `sweep_cursor_id` semantics are exactly as single-writer as before, because exactly one worker ever sweeps a given slot at a time. The throughput gain 0049 unlocks is **across** pages, not within one.
 - Cursor advancement and chunk `UPDATE` commit in one transaction. There is deliberately no separate "checkpoint flush" cadence — a stale cursor after a Liberator crash would let the Watcher undercount free capacity, defeating the whole capacity-accounting model the Liberator exists to feed.
 - `sweep_gap_flagged` is non-fatal. The Liberator continues past a gap rather than blocking forever on a hot-read partition, and retries the skipped range on its next cycle (AC#16). **The "accept the gap" advice this note used to carry was wrong and is withdrawn** — it argued from [ADR 0013](../adrs/0013-json-payload-as-system-of-record.md) that the gap range is safe because the *departing* field's data is still authoritative in `entry_data.fields`, which is true and answers the wrong question: the risk is the *arriving* field inheriting those values, and [ADR 0009](../adrs/0009-tombstone-based-slot-eviction.md) step 4 forbids offering the slot at all until it is confirmed empty. See [ADR 0046](../adrs/0046-a-gapped-sweep-skips-the-chunk-and-does-not-reclaim.md). An operator may still re-tombstone a slot to restart its sweep from the beginning, which AC#14 is what makes effective.
 
@@ -114,7 +114,7 @@ flowchart TD
 
 None. The cross-cutting decisions this blueprint depends on have been resolved:
 
-- Scaling, checkpoint cadence, and deadlock policy: [ADR 0009](../adrs/0009-tombstone-based-slot-eviction.md).
+- Checkpoint cadence and deadlock policy: [ADR 0009](../adrs/0009-tombstone-based-slot-eviction.md). Scaling (originally fixed as a singleton by the same ADR): reversed by [ADR 0049](../adrs/0049-multi-worker-liberator-excluded-per-page.md), which multi-workers the Liberator at page-table granularity.
 - Structured-log event vocabulary: [ADR 0020](../adrs/0020-structured-logging-mandate.md).
 - Slot status state machine and atomicity boundaries: [ADR 0017](../adrs/0017-schema-registry-as-coordination-contract.md).
 - Coordination model (registry-only, no IPC): [ADR 0015](../adrs/0015-database-as-sole-daemon-coordination-point.md).
@@ -129,4 +129,7 @@ None. The cross-cutting decisions this blueprint depends on have been resolved:
 - [ADR 0016 — Field Type Change Lifecycle](../adrs/0016-field-type-change-lifecycle.md)
 - [ADR 0017 — Schema Registry as Coordination Contract](../adrs/0017-schema-registry-as-coordination-contract.md)
 - [ADR 0020 — Structured Logging Mandate](../adrs/0020-structured-logging-mandate.md)
+- [ADR 0029 — Liberator Sweep Omits the Tenant Predicate](../adrs/0029-liberator-sweep-omits-tenant-predicate.md)
+- [ADR 0046 — A Gapped Sweep Skips the Chunk and Does Not Reclaim](../adrs/0046-a-gapped-sweep-skips-the-chunk-and-does-not-reclaim.md)
+- [ADR 0049 — Multi-Worker Liberator, Excluded at Page-Table Granularity](../adrs/0049-multi-worker-liberator-excluded-per-page.md)
 - [`watcher_reconciler_daemons.md`](watcher_reconciler_daemons.md) — peer feature blueprint

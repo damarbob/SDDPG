@@ -35,7 +35,7 @@ Every event is a single-line JSON object terminated by `\n` (newline-delimited J
 | `tenant_id`   | integer or null                                    | Required for any event tied to tenant-owned data; null for global daemon events.                           |
 | `correlation_id` | string                                          | Per-operation UUID: the caller's own request id where supplied, else minted at the operation boundary. Per-cycle for daemon loop events, per-chunk for chunk events. Carried through any sub-events emitted within the same operation, including across a process boundary. |
 
-Source-specific fields layer on top: the Reconciler adds `chunk_id`, `rows_claimed`, `rows_processed`; the Watcher adds `page_id`, `capacity_pct`; the Liberator adds `slot_assignment_id`, `sweep_cursor_id`; the API workers add `request_id`, `route`, `latency_ms`. Sub-fields are documented per event in the source's blueprint.
+Source-specific fields layer on top: the Reconciler adds `chunk_id`, `rows_claimed`, `rows_processed`; the Watcher adds `page_id`, `capacity_pct`; the Liberator adds `slot_assignment_id`, `sweep_cursor_id`, and (since ADR `0049`'s multi-worker upgrade) `worker_identity`; the API workers add `request_id`, `route`, `latency_ms`. Sub-fields are documented per event in the source's blueprint.
 
 #### The `registry` source's operation scope, and `chunk_correlation_id` (2026-09-06)
 
