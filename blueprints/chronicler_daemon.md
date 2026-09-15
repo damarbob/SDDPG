@@ -16,7 +16,7 @@ What none of those provide is a feature-level specification — testable accepta
 - **The Chronicler**: A multi-worker PHP CLI daemon (`bin/stardust chronicler`) that:
   - Polls `stardust_export_jobs` for unclaimed pending work, ordered by per-tenant round-robin position to enforce noisy-neighbor fairness.
   - Claims pending jobs via `SELECT ... FOR UPDATE SKIP LOCKED`, marking the row `processing` and recording `worker_identity`, `claimed_at`, and `heartbeat_at` in the same transaction.
-  - Periodically polls for abandoned claims (`status='processing' AND heartbeat_at < NOW() - INTERVAL <lease_timeout> SECOND`) and re-claims them, deleting any partial artifact and resuming from `last_cursor` per [ADR 0025](../adrs/0025-chronicler-failure-semantics.md) Commitment 1.
+  - Periodically polls for abandoned claims (`status='processing' AND heartbeat_at < NOW() - INTERVAL <lease_timeout> SECOND`) and re-claims them, attempting to adopt the prior partial artifact and resume from `last_cursor` per [ADR 0025](../adrs/0025-chronicler-failure-semantics.md) Commitment 1 as corrected by [ADR 0047](../adrs/0047-the-export-resume-anchor-is-the-artifact-plus-its-byte-offset.md) — the resume is verified against the artifact's actual bytes, not trusted from the row alone, and falls back to a fresh artifact when that verification fails.
   - Internally pages through `entry_data` only (reading `id, fields` JSON — the system of record per [ADR 0013](../adrs/0013-json-payload-as-system-of-record.md)), inheriting the bounded `LIMIT pageSize + 1` shape of the synchronous read path ([ADR 0005](../adrs/0005-two-query-bounded-read-path.md), [ADR 0006](../adrs/0006-cursor-based-pagination.md)). The slot-join shape of the synchronous read is deliberately not reused: exports must materialize every field, not just the indexed ones, so the JSON payload is the natural source and the per-page slot joins would be redundant work. Every database operation remains bounded by `page_size`.
   - Streams output to a local artifact file (CSV or JSON, format selected at job submission time).
   - Refreshes `heartbeat_at` in every chunk-commit transaction (default 5s cadence — i.e., the chunk-commit transaction *is* the heartbeat write).
@@ -57,8 +57,8 @@ What none of those provide is a feature-level specification — testable accepta
 ### Lease & heartbeat
 
 1. Every chunk-commit transaction also writes `heartbeat_at = NOW()`. There is no separate heartbeat timer or transaction. A worker that cannot commit a chunk also cannot heartbeat — by construction, the worker that has lost its database connection has lost its lease.
-2. The Chronicler runs an abandoned-claim sweep (default every 10s, distinct from the pending-job poll) using `SELECT ... FOR UPDATE SKIP LOCKED ... WHERE status='processing' AND heartbeat_at < NOW() - INTERVAL <lease_timeout> SECOND` (default 30s). A row claimed by this path is treated as **abandoned**: the new worker overwrites `worker_identity`, deletes any partial artifact at the row's path (best-effort), and resumes processing from `last_cursor`. The job's `claimed_at` is preserved; only `worker_identity` and `heartbeat_at` are overwritten.
-3. A worker that reads its own row mid-processing and observes `worker_identity != self` (a re-claimer overwrote it) emits `lease_lost`, releases all local file handles, deletes any partial artifact it owns, and exits the job loop without further writes. The lease-lost worker does **not** mark the row `failed`. Per [ADR 0025](../adrs/0025-chronicler-failure-semantics.md) Commitment 2, the re-claimer is now responsible for the terminal state.
+2. The Chronicler runs an abandoned-claim sweep (default every 10s, distinct from the pending-job poll) using `SELECT ... FOR UPDATE SKIP LOCKED ... WHERE status='processing' AND heartbeat_at < NOW() - INTERVAL <lease_timeout> SECOND` (default 30s). A row claimed by this path is treated as **abandoned**: the new worker overwrites `worker_identity`, and — per [ADR 0047](../adrs/0047-the-export-resume-anchor-is-the-artifact-plus-its-byte-offset.md) — attempts to re-open the row's prior `artifact_path` in place (no delete), verifying it holds at least `artifact_bytes` bytes and, for CSV, that its header still matches the current field set. On success the stream truncates to exactly `artifact_bytes`, seeks there, and processing resumes from `last_cursor`. On failure (file missing, short, header mismatch, or an unavailable file lock) the Chronicler discards the anchor, starts a fresh artifact, and probes from row 0 regardless of `last_cursor`. Either way the job's `claimed_at` is preserved; only `worker_identity` and `heartbeat_at` are overwritten by the claim itself.
+3. A worker that reads its own row mid-processing and observes `worker_identity != self` (a re-claimer overwrote it) emits `lease_lost`, releases its file lock and closes its local file handle **without deleting the artifact** — a re-claimer may already be resuming from those bytes — and exits the job loop without further writes. The lease-lost worker does **not** mark the row `failed`. Per [ADR 0025](../adrs/0025-chronicler-failure-semantics.md) Commitment 2, the re-claimer is now responsible for the terminal state.
 
 ### Failure handling
 
@@ -88,7 +88,7 @@ flowchart TD
     C1 -- "abandoned" --> CA1["SELECT ... FOR UPDATE SKIP LOCKED\nWHERE status='processing'\nAND heartbeat_at < NOW() - INTERVAL <lease_timeout> SECOND\nLIMIT 1"]
     CP1 --> C2{"Job claimed?"}
     CA1 --> CA2{"Abandoned job claimed?"}
-    CA2 -- Yes --> CA3["Delete partial artifact (best-effort)\nUPDATE: worker_identity=self,\n       heartbeat_at=NOW()\nResume from last_cursor"]
+    CA2 -- Yes --> CA3["UPDATE: worker_identity=self,\n       heartbeat_at=NOW()\n(artifact_path/artifact_bytes NOT touched)"]
     CA3 --> C7
     CA2 -- No --> C3
     C2 -- No --> C3["GC sweep: delete TTL'd artifacts,\nclean orphaned failed-job partials"]
@@ -96,8 +96,12 @@ flowchart TD
     C4 --> C5["Sleep idle_interval"]
     C5 --> C0
     C2 -- Yes --> C6["UPDATE: status='processing',\n         worker_identity=self,\n         claimed_at=NOW(),\n         heartbeat_at=NOW()\nEmit job_claimed"]
-    C6 --> C7["Open artifact file (append mode)"]
-    C7 --> C8["BEGIN TX\nProbe (Q1): WHERE id > last_cursor LIMIT page_size+1\nFetch (Q2): full rows for probed ids"]
+    C6 --> C7["Open artifact file 'c+b'\nRow has prior artifact_path/bytes?"]
+    C7 --> C7A{"Re-open verifies?\n(exists, size >= artifact_bytes,\nCSV header still matches)"}
+    C7A -- Yes --> C7B["flock, ftruncate to artifact_bytes,\nseek there, skip prelude\nEmit artifact_resumed{restart_cause:null}\ncursor = last_cursor"]
+    C7A -- No --> C7C["Truncate to 0, write prelude\nEmit artifact_resumed{restart_cause:...}\ncursor = 0"]
+    C7B --> C8
+    C7C --> C8["BEGIN TX\nProbe (Q1): WHERE id > cursor LIMIT page_size+1\nFetch (Q2): full rows for probed ids"]
     C8 -.SQLSTATE 40001.-> CD1["ROLLBACK\nEmit deadlock_retry"]
     CD1 --> CD2{"Retry < 3?"}
     CD2 -- Yes --> CD3["Sleep inter_chunk_delay"]
@@ -111,14 +115,14 @@ flowchart TD
     C11 --> C11A{"Encoding error?"}
     C11A -- Yes --> C11B["Emit row_skipped\nskip_count++"]
     C11B --> C11C{"skip_count > cap?"}
-    C11C -- Yes --> C13["UPDATE: status='failed',\n         failed_reason='excessive_skips'\nDelete partial artifact\nEmit job_failed"]
+    C11C -- Yes --> C13["Delete partial artifact\nUPDATE: status='failed',\n         failed_reason='excessive_skips',\n         artifact_path=NULL, artifact_bytes=NULL\nEmit job_failed"]
     C11C -- No --> C12
     C11A -- No --> C11D["Append row to artifact"]
     C11D --> C11E{"bytes > 5GB cap?"}
-    C11E -- Yes --> C14["UPDATE: status='failed',\n         failed_reason='artifact_size_exceeded'\nDelete partial artifact\nEmit artifact_oversized"]
-    C11E -- No --> C12["UPDATE: last_cursor=...,\n         heartbeat_at=NOW()\nCOMMIT (chunk + heartbeat together)\nEmit chunk_written"]
+    C11E -- Yes --> C14["Delete partial artifact\nUPDATE: status='failed',\n         failed_reason='artifact_size_exceeded',\n         artifact_path=NULL, artifact_bytes=NULL\nEmit artifact_oversized"]
+    C11E -- No --> C12["Flush stream\nUPDATE: last_cursor=...,\n         artifact_path=...,\n         artifact_bytes=bytesWritten(),\n         heartbeat_at=NOW()\nCOMMIT (chunk + heartbeat together)\nEmit chunk_written"]
     C12 --> C12A{"worker_identity == self?"}
-    C12A -- No --> C12B["Emit lease_lost\nClose file handles, exit job loop"]
+    C12A -- No --> C12B["Emit lease_lost\nRelease flock, close handle\n(artifact NOT deleted)\nExit job loop"]
     C12A -- Yes --> C8
     C13 --> C0
     C14 --> C0
@@ -132,6 +136,7 @@ flowchart TD
 - `chunk_skipped` charges `skip_count` by `page_size` even though the actual skipped row count is unknown. This is conservative: the cap fires earlier than perfect accounting would, but a job hitting the deadlock budget repeatedly is already failing in a way the operator should investigate.
 - The Chronicler inherits the bounded `LIMIT pageSize + 1` shape and tenant-scoped `WHERE` invariants of the synchronous read path ([ADR 0005](../adrs/0005-two-query-bounded-read-path.md), [ADR 0006](../adrs/0006-cursor-based-pagination.md)). It reads `entry_data` only — `id, fields` — and never joins `entry_slots_page_X` (exports include every field, so the JSON payload is the natural source and slot joins would be redundant). The export workload is the same bounded shape as a synchronous read, with a simpler projection.
 - Three failure terminal events (`job_failed`, `artifact_oversized`, `lease_lost`) collapse onto two `status` values (`failed`, plus the lease-lost case where the re-claimer determines terminal state). Distinct events are for dashboard routing; row state is for operator-visible job status.
+- Per [ADR 0047](../adrs/0047-the-export-resume-anchor-is-the-artifact-plus-its-byte-offset.md), the resume anchor is the artifact file's verified bytes, not the `last_cursor` column alone: `artifact_path`/`artifact_bytes` are written on **every** chunk commit (not only the final one), the re-claim path no longer deletes the prior partial, and the processor only trusts `last_cursor` when the artifact stream itself reports a successful, verified re-open. A terminal failure NULLs `artifact_path`/`artifact_bytes` in the same UPDATE that deletes the file, so a `failed` row never advertises an anchor to bytes that no longer exist.
 
 ## 6. Chronicler Event Payloads
 
@@ -145,6 +150,7 @@ The closed event-name vocabulary for `source: "chronicler"` is pinned below. The
 | `chunk_skipped`        | `warn`  | `job_id`, `worker_identity`, `start_cursor`, `end_cursor`, `cause` (closed: `deadlock_budget_exhausted`).                           |
 | `row_skipped`          | `warn`  | `job_id`, `worker_identity`, `entry_id`, `reason` (closed: `format_invalid` \| `unrepresentable_codepoint`).                        |
 | `lease_lost`           | `warn`  | `job_id`, `worker_identity` (the losing worker), `last_heartbeat_at`.                                                               |
+| `artifact_resumed`     | `info`  | `job_id`, `worker_identity`, `resumed_from_byte`, `last_cursor`, `restart_cause` (`null` on genuine resume, else closed: `no_anchor` \| `missing` \| `short` \| `header_mismatch` \| `locked`). |
 | `low_disk`             | `warn`  | `partition`, `free_pct`, `threshold_pct`. `tenant_id` is `null` (cycle-scoped).                                                     |
 | `artifact_oversized`   | `warn`  | `job_id`, `worker_identity`, `bytes_written`, `cap_bytes`. Job is marked `failed` with `failed_reason='artifact_size_exceeded'`.    |
 | `job_complete`         | `info`  | `job_id`, `worker_identity`, `artifact_path`, `rows_streamed_total`, `bytes_written_total`, `skip_count`, `elapsed_ms`.             |
@@ -158,6 +164,7 @@ The closed event-name vocabulary for `source: "chronicler"` is pinned below. The
 - A `lease_lost` event and a subsequent `job_complete` (or `job_failed`) for the same `job_id` may carry different `worker_identity` values. This is the normal recovery signal.
 - `job_failed` carries both a row-level `failed_reason` and an event-level `reason`. The event-level `reason` taxonomy is closed: `excessive_skips`, `db_disconnect_exhausted`, `disk_full`, `other`. The event field is finer-grained than the row state — `failed_reason='query_failure'` is the row state; `reason='db_disconnect_exhausted'` is the structured-log signal that a future `failed_reason='query_failure'` could also include other causes.
 - A job hitting the per-job artifact size cap emits `artifact_oversized`, **not** `job_failed`. The cap is an expected boundary, not an unexpected failure; routing it to a different event lets dashboards distinguish "consumer requested too much data" from "infrastructure broke".
+- `artifact_resumed` fires exactly once per claimed job, immediately after `stream->open()` and before the first chunk probe — on both the genuine-resume and every fallback-restart path, so `resumed_from_byte: 0` plus a non-null `restart_cause` is how an operator distinguishes "this claim never had an anchor" (`no_anchor`) from "it had one and re-opening it failed" (`missing` \| `short` \| `header_mismatch` \| `locked`).
 
 ## 7. Resolved Decisions
 
@@ -165,6 +172,7 @@ The cross-cutting decisions this blueprint depends on have been resolved:
 
 - High-level export contract (per-tenant cap, TTL, format negotiation): [ADR 0010](../adrs/0010-asynchronous-exports.md).
 - Failure semantics (lease/heartbeat, deadlock budget, bad-row policy, infrastructure-failure routing): [ADR 0025](../adrs/0025-chronicler-failure-semantics.md).
+- Resume-anchor semantics (artifact + byte offset as one adoptable unit): [ADR 0047](../adrs/0047-the-export-resume-anchor-is-the-artifact-plus-its-byte-offset.md).
 - Persistence schema (columns, indexes, `failed_reason` taxonomy): [`schemas/schema_reference.md`](../schemas/schema_reference.md) §5.2.
 - Bounded read path: [ADR 0005](../adrs/0005-two-query-bounded-read-path.md), [ADR 0006](../adrs/0006-cursor-based-pagination.md).
 - Coordination model (database-only, no IPC): [ADR 0015](../adrs/0015-database-as-sole-daemon-coordination-point.md).
@@ -181,6 +189,7 @@ Open: none.
 - [ADR 0015 — Database as Sole Daemon Coordination Point](../adrs/0015-database-as-sole-daemon-coordination-point.md)
 - [ADR 0020 — Structured Logging Mandate](../adrs/0020-structured-logging-mandate.md)
 - [ADR 0025 — Chronicler Failure Semantics](../adrs/0025-chronicler-failure-semantics.md)
+- [ADR 0047 — The Export Resume Anchor Is The Artifact Plus Its Byte Offset](../adrs/0047-the-export-resume-anchor-is-the-artifact-plus-its-byte-offset.md)
 - [`liberator_daemon.md`](liberator_daemon.md) — peer feature blueprint (singleton daemon).
 - [`watcher_reconciler_daemons.md`](watcher_reconciler_daemons.md) — peer feature blueprint (singleton + multi-worker).
 - [`schemas/schema_reference.md`](../schemas/schema_reference.md) §5.2 — `stardust_export_jobs` schema.

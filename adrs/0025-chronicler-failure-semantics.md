@@ -15,6 +15,8 @@ ADR [`0010`](0010-asynchronous-exports.md) commits the Chronicler to a multi-wor
 
 ADR [`0020`](0020-structured-logging-mandate.md) has already committed the Chronicler to a closed structured-log event vocabulary. The events pinned in this ADR's decision section are the events that observability dashboards and alerts will key on; once shipped they cannot be renamed without a coordinated blueprint update.
 
+> **Extended 2026-09-14 by ADR [`0047`](0047-the-export-resume-anchor-is-the-artifact-plus-its-byte-offset.md):** Commitment 1's resume-from-`last_cursor` claim below does not hold as written — the claimer deletes the prior partial artifact while the processor trusted the stored cursor, so a re-claim silently skipped every row the deleted file held. ADR 0047 corrects the recovery path: resume now requires a verified re-open of the artifact's bytes, not a trusted cursor alone. It also corrects Commitment 2's lease-loss partial-delete (a lease-losing worker now releases its lock and leaves the file for the re-claimer rather than deleting it) and adds a fallback-accounting caveat to Commitment 5's skip-count carry-forward. Commitments 3, 4, and the rest of 6 are unchanged.
+
 ## Decision
 
 Six commitments govern Chronicler failure semantics. The schema column additions in [`schemas/schema_reference.md`](../schemas/schema_reference.md) §5.2 (`claimed_at`, `heartbeat_at`, `skip_count`, extended `failed_reason` enum) are the persistence substrate; this ADR pins the engine semantics.
