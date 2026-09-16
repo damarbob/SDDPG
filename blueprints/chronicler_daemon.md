@@ -23,7 +23,7 @@ What none of those provide is a feature-level specification — testable accepta
   - Marks the job `completed` with the artifact path on success, or `failed` with a diagnostic `failed_reason` and last-cursor on terminal failure.
 - **Per-tenant fairness**: Round-robin claim ordering — `(tenant_round_robin_position, created_at ASC)` where the position is computed at claim time as `MIN(created_at)` per tenant over `status='pending'` rows ([schema_reference.md §5.2](../schemas/schema_reference.md)). A single tenant's queue depth never starves another tenant.
 - **TTL and GC sweep**: On each idle cycle, the Chronicler deletes artifact files whose `completed_at + ttl < NOW()` (default TTL 24h, configurable). Orphaned partial files from `failed` jobs older than 1 hour are also collected.
-- **Disk-pressure circuit**: Before claiming a new job, the Chronicler checks free disk on the artifact partition. Below 10% free, it skips claim and emits `low_disk` until pressure clears. In-flight jobs continue. (Distinct from the `disk_full` mid-write terminal event; see §4.)
+- **Disk gate**: Before claiming a new job, the Chronicler asks whether it can commit to writing an artifact at all. Two ordered, short-circuiting checks (ADR [`0051`](../adrs/0051-the-disk-gate-is-a-write-probe-not-a-free-space-ratio.md)): **(1)** free-space ratio against the artifact directory — below the threshold (default 10%) it skips the claim with `cause='free_pct'` and the second check does not run; **(2)** a **write probe** — actually write `chronicler_disk_probe_bytes` (default 64 KiB, `0` disables) into the artifact directory and delete them again; any failure stage skips the claim with `cause='write_probe'`. Either way it emits `low_disk` until pressure clears, and in-flight jobs continue. The probe exists because a per-uid quota is invisible to `statvfs`: measured, an ext4 account 1 MiB from its cap reported the filesystem 91.2% free while every write failed with `EDQUOT`. Project quotas (ext4 `prjquota`, XFS `pquota`) do scope `statvfs` correctly, which is why the ratio is retained as a pre-filter rather than replaced. The probe fails **closed** at every stage, including permission errors. `partition` names the configured artifact directory, not a device. (Distinct from the `disk_full` mid-write terminal event; see §4.)
 - **Per-job artifact size cap**: Default 5 GB, configurable. Reaching the cap aborts the job with `failed_reason='artifact_size_exceeded'` and emits `artifact_oversized`.
 - **Bad-row skip + bounded skip cap**: Per [ADR 0025](../adrs/0025-chronicler-failure-semantics.md) Commitments 4 and 5 — single rows with format-incompatible bytes are skipped (emit `row_skipped`, charge `skip_count`); a job's cumulative `skip_count` exceeding the cap aborts with `failed_reason='excessive_skips'`.
 - **Closed structured-log event vocabulary**: Aligned with [ADR 0020](../adrs/0020-structured-logging-mandate.md). The full closed set is pinned in §6.
@@ -79,6 +79,16 @@ What none of those provide is a feature-level specification — testable accepta
     - **`ENOSPC` on append**: `failed_reason='disk_full'`, partial artifact deleted (best-effort), emit `job_failed` with `reason='disk_full'`. Distinct from the `low_disk` claim-gate event.
     - **Per-job artifact size cap reached**: `failed_reason='artifact_size_exceeded'`, partial artifact deleted, emit `artifact_oversized` (NOT `job_failed` — the cap is a configured boundary, not an unexpected failure).
 
+#### Disk gate (ADR 0051)
+
+1. The gate runs exactly ONE probe per tick and exposes it as a single immutable reading. Every field the `low_disk` event carries (`partition`, `free_pct`, `threshold_pct`, `cause`, `probe_bytes`, `probe_stage`, `probe_error`) comes off that same reading, so the logged `free_pct` can never be a different syscall result from the one that decided to skip the claim. The reading is not cached across ticks — a transient pressure spike must not stick after the filesystem recovers.
+2. The ratio check is evaluated first and short-circuits: on a trip it returns immediately with `cause='free_pct'`, the write probe does not run, and `probe_stage`/`probe_error` are null by construction. `cause` is therefore a clean partition — there is no `both` value.
+3. The ratio probe is always taken against the configured artifact directory and never against a fallback such as the system temp directory. A directory that does not exist yields `free_pct = null` (fail open), exactly as any other probe failure does — `partition` must never name a directory that was not the one measured.
+4. The write probe writes `chronicler_disk_probe_bytes` of real bytes to a **uniquely-named** file in the artifact directory, verifies the full byte count landed and that `fflush` and `fclose` both succeeded, then unlinks it in a `finally`. It must not use `ftruncate()` — a sparse file allocates no blocks and so incurs no quota charge, which would make the probe pass under the exact condition it exists to detect. The unique filename is load-bearing for multi-worker safety: with a fixed name, one worker's cleanup would delete another's in-flight probe.
+5. The write probe fails **closed** at every stage (`mkdir`, `open`, `write`, `flush`, `close`), including permission errors. A failed unlink is NOT a gate failure — the probe has already answered the question, and GC is the backstop.
+6. `chronicler_disk_probe_bytes = 0` is a complete opt-out restoring the prior ratio-only, fail-open gate, *including* taking no filesystem side effect: with the probe disabled the gate must not create the artifact directory either.
+7. A leaked probe file older than `chronicler_orphaned_partial_ttl_seconds` is reclaimed by the GC sweep and reported as `probes_deleted`, never folded into `artifacts_deleted`. The age check is what prevents deleting another worker's live probe mid-tick.
+
 ### Observability
 
 1. The Chronicler emits one event per logical operation per the closed vocabulary in §6. Adding a new event name requires updating §6 ([ADR 0020](../adrs/0020-structured-logging-mandate.md) §Event Vocabulary). All events carry the ADR 0020 baseline (`ts`, `level`, `source='chronicler'`, `event`, `tenant_id`, `correlation_id`); job-scoped events carry `correlation_id` = per-job UUID; the GC and disk-pressure events carry `correlation_id` = per-cycle UUID.
@@ -86,7 +96,7 @@ What none of those provide is a feature-level specification — testable accepta
 
 ### Idle behavior
 
-1. When no `pending` rows exist and the abandoned-claim sweep finds no expired leases, the Chronicler runs the GC sweep (TTL'd artifacts + orphaned partials) and sleeps for the configured idle interval (default 10s). Idle ticks emit no events; only a `gc_swept` with `artifacts_deleted > 0` or a `low_disk` produces output. This matches the Liberator's idle policy and prevents log spam.
+1. When no `pending` rows exist and the abandoned-claim sweep finds no expired leases, the Chronicler runs the GC sweep (TTL'd artifacts, orphaned partials, and — per ADR [`0051`](../adrs/0051-the-disk-gate-is-a-write-probe-not-a-free-space-ratio.md) — leaked disk-probe files) and sleeps for the configured idle interval (default 10s). Idle ticks emit no events; only a `gc_swept` with `artifacts_deleted > 0` or `probes_deleted > 0`, or a `low_disk`, produces output. This matches the Liberator's idle policy and prevents log spam.
 
 ## 5. Technical Sketch
 
@@ -160,12 +170,12 @@ The closed event-name vocabulary for `source: "chronicler"` is pinned below. The
 | `row_skipped`          | `warn`  | `job_id`, `worker_identity`, `entry_id`, `reason` (closed: `format_invalid` \| `unrepresentable_codepoint`).                        |
 | `lease_lost`           | `warn`  | `job_id`, `worker_identity` (the losing worker), `last_heartbeat_at`.                                                               |
 | `artifact_resumed`     | `info`  | `job_id`, `worker_identity`, `resumed_from_byte`, `last_cursor`, `restart_cause` (`null` on genuine resume, else closed: `no_anchor` \| `missing` \| `short` \| `header_mismatch` \| `locked`). |
-| `low_disk`             | `warn`  | `partition`, `free_pct`, `threshold_pct`. `tenant_id` is `null` (cycle-scoped).                                                     |
+| `low_disk`             | `warn`  | `partition`, `free_pct`, `threshold_pct`, `cause` (`free_pct` \| `write_probe`), `probe_bytes`, `probe_stage` (`mkdir` \| `open` \| `write` \| `flush` \| `close`), `probe_error`. `tenant_id` is `null` (cycle-scoped). |
 | `artifact_oversized`   | `warn`  | `job_id`, `worker_identity`, `bytes_written`, `cap_bytes`. Job is marked `failed` with `failed_reason='artifact_size_exceeded'`.    |
 | `job_complete`         | `info`  | `job_id`, `worker_identity`, `artifact_path`, `rows_streamed_total`, `bytes_written_total`, `skip_count`, `elapsed_ms`.             |
 | `job_yielded`          | `info`  | `job_id`, `worker_identity`, `last_cursor`, `artifact_bytes`, `rows_streamed_total` (this attempt only, not cumulative across prior yields), `skip_count`, `cause` (`budget` \| `shutdown`), `elapsed_ms`. ADR 0050 — emitted in place of `job_complete` at a non-final chunk boundary; the job returns to `pending` with its anchor intact. |
 | `job_failed`           | `error` | `job_id`, `worker_identity`, `failed_reason`, `reason` (event-level; closed taxonomy in Notes), `last_cursor`, `bytes_written`.     |
-| `gc_swept`             | `info`  | `artifacts_deleted`, `bytes_reclaimed`. Emitted only when `artifacts_deleted > 0`. `tenant_id` is `null`.                           |
+| `gc_swept`             | `info`  | `artifacts_deleted`, `bytes_reclaimed`, `probes_deleted`. Emitted only when `artifacts_deleted > 0` or `probes_deleted > 0`. A leaked disk-probe file is **not** an artifact and is never counted as one. `tenant_id` is `null`. |
 
 **Notes:**
 

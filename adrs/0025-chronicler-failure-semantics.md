@@ -17,6 +17,8 @@ ADR [`0020`](0020-structured-logging-mandate.md) has already committed the Chron
 
 > **Extended 2026-09-14 by ADR [`0047`](0047-the-export-resume-anchor-is-the-artifact-plus-its-byte-offset.md):** Commitment 1's resume-from-`last_cursor` claim below does not hold as written — the claimer deletes the prior partial artifact while the processor trusted the stored cursor, so a re-claim silently skipped every row the deleted file held. ADR 0047 corrects the recovery path: resume now requires a verified re-open of the artifact's bytes, not a trusted cursor alone. It also corrects Commitment 2's lease-loss partial-delete (a lease-losing worker now releases its lock and leaves the file for the re-claimer rather than deleting it) and adds a fallback-accounting caveat to Commitment 5's skip-count carry-forward. Commitments 3, 4, and the rest of 6 are unchanged.
 
+> **Amended 2026-09-16 by ADR [`0051`](0051-the-disk-gate-is-a-write-probe-not-a-free-space-ratio.md):** the disk-pressure circuit this ADR's Context (failure mode 5) and configuration table both frame as "<10% free" is no longer authoritative on its own. Measured on kernel 6.18.33.2: under an **ext4 per-uid quota** 1 MiB from its cap, `disk_free_space()` reported the filesystem 91.2% free while every write failed with `EDQUOT` — so the ratio cannot detect a per-account quota wall, however it is tuned. The gate now runs a **write probe** (`chronicler_disk_probe_bytes`, 64 KiB, `0` disables) with the ratio demoted to a short-circuiting pre-filter, and `low_disk` gains a closed `cause` sub-taxonomy. Project quotas (ext4 `prjquota`, XFS `pquota`) were measured to scope `statvfs` correctly and were never affected. **Commitment 6's mid-write `disk_full` semantics are explicitly unchanged and were re-validated by the same measurement**: `EDQUOT`/`ENOSPC` surfaces at `write(2)`, which the existing short-write check already catches.
+
 ## Decision
 
 Six commitments govern Chronicler failure semantics. The schema column additions in [`schemas/schema_reference.md`](../schemas/schema_reference.md) §5.2 (`claimed_at`, `heartbeat_at`, `skip_count`, extended `failed_reason` enum) are the persistence substrate; this ADR pins the engine semantics.
@@ -60,7 +62,8 @@ Six commitments govern Chronicler failure semantics. The schema column additions
 | `db_disconnect_backoff_seconds` | `[1, 4, 16]` | Fixed schedule; not per-deployment tunable. |
 | `skip_count_cap` | 1000 | Job-scoped, not chunk-scoped. |
 | `page_size` | inherits the synchronous read path | Per [ADR 0006](0006-cursor-based-pagination.md). |
-| Disk-pressure threshold | 10% free | Pre-existing; gates new claims only. |
+| Disk-pressure threshold | 10% free | Pre-existing; gates new claims only. **Amended 2026-09-16 by ADR [`0051`](0051-the-disk-gate-is-a-write-probe-not-a-free-space-ratio.md)** — see below. |
+| `chronicler_disk_probe_bytes` | 64 KiB | Added by ADR [`0051`](0051-the-disk-gate-is-a-write-probe-not-a-free-space-ratio.md); `0` disables the write probe. |
 | Artifact size cap | 5 GB | Pre-existing; per [ADR 0010](0010-asynchronous-exports.md). |
 
 ## Consequences
