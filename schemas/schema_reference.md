@@ -34,6 +34,7 @@ flowchart TB
         ij["stardust_import_jobs"]
         dlq["stardust_reconciler_dlq"]
         bc["backfill_checkpoints"]
+        as["stardust_advisory_schedule"]
     end
 
     %% Real foreign keys (solid) — enforced by InnoDB, and ONLY within a group.
@@ -522,3 +523,33 @@ The Reconciler daemon's claim-and-process queue for async bulk-ingest submission
 
 > [!NOTE]
 > Phase 3 owns _submission_: it persists the artifact + the row and returns the ID. Status transitions, claim semantics, and `manifest` population are Phase 5 (Reconciler) work — this section documents the column shapes Phase 5 will rely on, not their lifecycle.
+
+### 5.6 `stardust_advisory_schedule` (Advisory Sample Schedule)
+
+A single-row singleton holding the due time of the next advisory sample, shared by the ADR [`0019`](../adrs/0019-index-cardinality-policy.md) cardinality advisory and the ADR [`0031`](../adrs/0031-slot-spread-metric.md) spread advisory (which rides the same timer by that ADR's §Sampling Triggers 1). Introduced by ADR [`0052`](../adrs/0052-the-advisory-schedule-is-persisted-and-fleet-wide.md), which moved the schedule out of the Watcher's process memory so it survives a process that exits after every run — the ADR [`0048`](../adrs/0048-bounded-combined-tick-for-cron-driven-hosting.md) cron-driven mode, where a fresh `Watcher` per invocation could never reach its first due-check.
+
+| Column           | Type       | Description                                                                                                                                  |
+| :--------------- | :--------- | :------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`             | `TINYINT`  | Primary Key. Always `1`. Singleton enforced by `CHECK (id = 1)`.                                                                             |
+| `next_sample_at` | `DATETIME` **NULL** | UTC instant the next sample becomes due. **NULL means "never scheduled"** — the first observer writes `now + rand(0, interval)` and samples nothing, which is what preserves ADR 0019's first-sample phase randomization. |
+| `last_sample_at` | `DATETIME` **NULL** | UTC instant of the last winning claim. Diagnostic only; NULL until the first sample fires.                                                   |
+| `updated_at`     | `DATETIME` | Timestamp of the last write to this row. Diagnostic only.                                                                                    |
+
+**Indexes and constraints:**
+
+- `PRIMARY KEY (id)`
+- `CHECK (id = 1)` — singleton enforcement, advisory only on MySQL 8.0.13–8.0.15 (silently dropped; verified on 8.0.13). The PK plus the bootstrap seed step are the real guarantee, exactly as for §5.1.
+
+> [!IMPORTANT]
+> **The due-check is a conditional UPDATE whose affected-row count is the claim**, not a read followed by a write:
+>
+> ```sql
+> UPDATE stardust_advisory_schedule
+>    SET next_sample_at = ?, last_sample_at = ?, updated_at = ?
+>  WHERE id = 1 AND next_sample_at IS NOT NULL AND next_sample_at <= ?
+> ```
+>
+> The reschedule cannot be split out of it — the statement's atomicity is the entire exclusion mechanism, so **one sample fires per interval across the whole deployment rather than one per daemon**. Two further constraints are measured rather than stylistic: the next due time must strictly advance (MySQL reports *changed* rows, so writing back a stored value reports zero and skips the sample silently), and every datetime is bound from the injected clock rather than `UTC_TIMESTAMP()` (the session `time_zone` is `SYSTEM` by default, so mixing the two compares two clocks). ADR 0052 carries both measurements.
+
+> [!NOTE]
+> Deliberately a second singleton table rather than a column on §5.1. That row is a global serialization point every registry-mutating transaction bumps, and its `updated_at` means "when the schema last changed" — an advisory claim would have to either write it, making the column lie, or leave it stale beside a column it just changed.

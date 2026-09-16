@@ -22,12 +22,15 @@ The schema-registry advisory pipeline samples cardinality on each indexed slot o
 
 ### Sampling Triggers
 
-A cardinality sample is taken on a slot under either condition:
+A cardinality sample is taken on a slot under any of these conditions:
 
 1. **Post-backfill (one-shot).** When the Reconciler advances a `stardust_slot_assignments` row from `backfilling → ready` (per ADR `0016`'s promote step), it issues a cardinality sample on the newly-ready slot in the same logical operation as the promotion. This is the earliest moment the slot has full data, and the sample becomes the slot's baseline reading. This trigger fires for every newly-promoted slot — type changes, filterability promotions, and freshly-assigned cold slots all run through `backfilling → ready` and therefore all sample at promotion.
 2. **Periodic re-sample.** Each indexed slot is re-sampled on a configurable schedule (default: every 24 hours, jittered to avoid stampedes). Cardinality drifts as data ingests; a slot that was selective at promotion can become unselective months later, and operators need to know.
+3. **On demand.** An operator can take a reading at any time via `bin/stardust cardinality:report [--tenant=N] [--model=N]`, emitting the same events with `trigger='on_demand'` and also returning the samples so the CLI can print them. Added 2026-09-16 by ADR [`0052`](0052-the-advisory-schedule-is-persisted-and-fleet-wide.md), which also records why this is **not** as cheap as the equivalent `spread:report`: the spread advisory is registry-only, while this one reads `COUNT(*)` / `COUNT(DISTINCT col)` off every matching extension page. Note `--model` narrows which *slots* are sampled, not which *rows* are counted — the aggregate below is per `(tenant, slot)` over the whole partition because the index it describes is `(tenant_id, slot_column)`, and a page is shared between models.
 
-The pipeline does NOT sample synchronously inside the read path or the write path. Both triggers fire on the same lazy cadence as the existing daemons; cardinality measurement does not contend with consumer traffic.
+> **Amended 2026-09-16 by ADR [`0052`](0052-the-advisory-schedule-is-persisted-and-fleet-wide.md):** trigger 2's schedule is **persisted and fleet-wide**, not per-process. It was implemented as a process-local field on the Watcher, which is correct for a persistent daemon but could never fire under ADR [`0048`](0048-bounded-combined-tick-for-cron-driven-hosting.md)'s cron-driven mode — a fresh `Watcher` per invocation always gets the always-false first due-check. The due time now lives in a `stardust_advisory_schedule` singleton and is claimed by a conditional UPDATE, so **one sample fires per interval across the whole deployment rather than one per daemon**. The jitter and the first-sample phase randomisation described here are unchanged in mechanism; what changed is the level they de-correlate at. The "stampede" this trigger guards against is now between deployments and between successive samples, not between one deployment's own hosts.
+
+The pipeline does NOT sample synchronously inside the read path or the write path. The two automatic triggers fire on the same lazy cadence as the existing daemons; cardinality measurement does not contend with consumer traffic. Trigger 3 is operator-initiated and so is timed by whoever runs it — which is why its CLI help says to prefer off-peak.
 
 ### Sampling Method
 
@@ -79,7 +82,7 @@ Both events are structured log records on `source: registry` per ADR `0020`. Req
 | `row_count`       | integer  | Sampled population size.                                             |
 | `distinct_values` | integer  | Estimated distinct values (exact for `COUNT(DISTINCT)`, estimated for `EXPLAIN ANALYZE`). |
 | `selectivity`     | float    | `distinct_values / row_count`, rounded to 4 decimal places.          |
-| `trigger`         | string   | `post_backfill` or `periodic`.                                       |
+| `trigger`         | string   | `post_backfill`, `periodic`, or `on_demand` (ADR 0052).              |
 
 A `low_cardinality_index` event additionally includes:
 
