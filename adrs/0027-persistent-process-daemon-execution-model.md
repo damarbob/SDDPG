@@ -40,6 +40,8 @@ A supported deployment target MUST provide all of:
 4. Local filesystem write access for the Chronicler's export artifacts (a mounted volume in container deployments).
 5. PID-file or container-orchestrator-level enforcement of Watcher singleton execution (the in-DB `GET_LOCK` advisory lock is the safety net, not the primary enforcement).
 
+> **Amended 2026-09-16 by ADR [`0053`](0053-advisory-lock-names-are-qualified-per-installation.md):** the "safety net" framing of item 5's `GET_LOCK` was written for a deployment where the database server belongs to the installation, a premise this ADR's own cron-only shared-hosting tier (extended by ADR `0048` below) breaks — many unrelated accounts can share one `mysqld`, and a bare `GET_LOCK` name is scoped to the whole server, not to a schema. ADR 0053 qualifies both of the engine's advisory lock names with a per-installation suffix so the safety net catches only a *this-installation* Watcher, never a neighbour's. Item 5's requirement is otherwise unchanged: the PID file remains primary enforcement, and the advisory lock remains the net.
+
 ### Host sizing (deliberately not pinned)
 
 Raw RAM / CPU / disk sizing is **not** pinned by this ADR. StarDust's resource footprint is bounded by design — the two-query read path, `LIMIT page_size + 1` enforcement, chunked ingestion, and the lazy-poll daemon profile collectively guarantee a flat memory footprint regardless of dataset size. Resource sizing scales with the tenant's data volume and traffic, not with StarDust's baseline. Concrete sizing guidance belongs in the planned `runbooks/` directory, not in this ADR.
@@ -82,3 +84,4 @@ The following documents are updated as part of this ADR landing:
 - [ADR `0025`](0025-chronicler-failure-semantics.md) — Chronicler failure semantics (lease / heartbeat / re-claim — already makes export jobs resumable).
 - [ADR `0026`](0026-framework-neutral-composer-packaging.md) — Framework-neutral Composer packaging (defines the `bin/stardust` CLI surface this ADR pins the execution model for).
 - [ADR `0048`](0048-bounded-combined-tick-for-cron-driven-hosting.md) — Ships the `--once`-shaped mode this ADR deferred, for three of the four daemons. See the dated pointer above.
+- [ADR `0053`](0053-advisory-lock-names-are-qualified-per-installation.md) — Qualifies the Watcher's `GET_LOCK` advisory-lock safety net (Host capability requirement 5) with a per-installation suffix, closing a cross-installation contention hazard the cron-only shared-hosting tier this ADR names introduced. Carries a dated pointer here.

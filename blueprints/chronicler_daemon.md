@@ -139,10 +139,13 @@ flowchart TD
     C11A -- No --> C11D["Append row to artifact"]
     C11D --> C11E{"bytes > 5GB cap?"}
     C11E -- Yes --> C14["Delete partial artifact\nUPDATE: status='failed',\n         failed_reason='artifact_size_exceeded',\n         artifact_path=NULL, artifact_bytes=NULL\nEmit artifact_oversized"]
-    C11E -- No --> C12["Flush stream\nUPDATE: last_cursor=...,\n         artifact_path=...,\n         artifact_bytes=bytesWritten(),\n         heartbeat_at=NOW()\nCOMMIT (chunk + heartbeat together)\nEmit chunk_written"]
+    C11E -- No --> C12Y{"Non-final chunk AND\nyield signal set? (ADR 0050)"}
+    C12Y -- No --> C12["Flush stream\nUPDATE: last_cursor=...,\n         artifact_path=...,\n         artifact_bytes=bytesWritten(),\n         heartbeat_at=NOW()\nCOMMIT (chunk + heartbeat together)\nEmit chunk_written"]
     C12 --> C12A{"worker_identity == self?"}
     C12A -- No --> C12B["Emit lease_lost\nRelease flock, close handle\n(artifact NOT deleted)\nExit job loop"]
     C12A -- Yes --> C8
+    C12Y -- Yes --> C12Z["Flush + close (release lock BEFORE commit)\nUPDATE: status='pending', worker_identity=NULL,\n         last_cursor=..., artifact_path=...,\n         artifact_bytes=bytesWritten(), heartbeat_at=NOW()\n(claimed_at, correlation_id untouched)\nCOMMIT\nEmit job_yielded"]
+    C12Z --> C0
     C13 --> C0
     C14 --> C0
     C10 --> C0
@@ -212,7 +215,7 @@ Open: none.
 - [ADR 0020 — Structured Logging Mandate](../adrs/0020-structured-logging-mandate.md)
 - [ADR 0025 — Chronicler Failure Semantics](../adrs/0025-chronicler-failure-semantics.md)
 - [ADR 0047 — The Export Resume Anchor Is The Artifact Plus Its Byte Offset](../adrs/0047-the-export-resume-anchor-is-the-artifact-plus-its-byte-offset.md)
-- [`liberator_daemon.md`](liberator_daemon.md) — peer feature blueprint (singleton daemon).
+- [`liberator_daemon.md`](liberator_daemon.md) — peer feature blueprint (multi-worker, excluded at page-table granularity since ADR 0049 — no longer a singleton daemon).
 - [`watcher_reconciler_daemons.md`](watcher_reconciler_daemons.md) — peer feature blueprint (singleton + multi-worker).
 - [`schemas/schema_reference.md`](../schemas/schema_reference.md) §5.2 — `stardust_export_jobs` schema.
 - [`async_exports.md`](async_exports.md) — relocated HTTP-facing portions (StarGate concern).

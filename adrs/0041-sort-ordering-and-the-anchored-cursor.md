@@ -69,7 +69,7 @@ For sort key `k` and anchor value `av`, ascending:
 
 Descending mirrors it: the first branch becomes `av IS NOT NULL AND k IS NULL`, because NULLs sort last.
 
-**All three branches are load-bearing.** A slot column is nullable — a row whose value has not been mirrored into its slot (an [`0007`](0007-write-availability-under-slot-exhaustion.md) exhaustion fallback still awaiting the Reconciler) reads NULL — and `k > NULL` is UNKNOWN, so a two-branch predicate silently loses every NULL row. Verified by deleting the first branch and confirming an ascending walk stops at the end of the NULL block and never reaches the valued rows.
+**All three branches are load-bearing.** A slot column is nullable — a row whose value has not been mirrored into its slot (an [`0007`](0007-write-availability-over-query-completeness.md) exhaustion fallback still awaiting the Reconciler) reads NULL — and `k > NULL` is UNKNOWN, so a two-branch predicate silently loses every NULL row. Verified by deleting the first branch and confirming an ascending walk stops at the end of the NULL block and never reaches the valued rows.
 
 That a NULL slot means "not mirrored yet" rather than "no value" is **the same visibility gap filters already have** under `0007`: such a row does not match a filter on that field either. It is stated here as existing behaviour, not introduced by this ADR.
 

@@ -34,7 +34,7 @@ The Watcher and Reconciler each have such a blueprint ([`watcher_reconciler_daem
 
 ### Page-level exclusion (multi-worker since ADR 0049)
 
-1. Multiple Liberator instances may run concurrently against the same database with no PID file, OS-level process lock, or startup-time collision of any kind — [ADR 0008](../adrs/0008-singleton-watcher-multi-worker-reconciler.md)'s singleton mechanism applies to the Watcher only. Instead, two workers never sweep the same `entry_slots_page_N` table at the same time: each worker takes a `GET_LOCK('stardust_sweep_page_{pageId}', 0)` advisory lock before sweeping a slot on that page, and skips the slot for this cycle on contention rather than waiting. See [ADR 0049](../adrs/0049-multi-worker-liberator-excluded-per-page.md).
+1. Multiple Liberator instances may run concurrently against the same database with no PID file, OS-level process lock, or startup-time collision of any kind — [ADR 0008](../adrs/0008-singleton-watcher-multi-worker-reconciler.md)'s singleton mechanism applies to the Watcher only. Instead, two workers never sweep the same `entry_slots_page_N` table at the same time: each worker takes a `GET_LOCK('stardust_sweep_page_{pageId}', 0)` advisory lock before sweeping a slot on that page, and skips the slot for this cycle on contention rather than waiting. See [ADR 0049](../adrs/0049-multi-worker-liberator-excluded-per-page.md). **Since [ADR 0053](../adrs/0053-advisory-lock-names-are-qualified-per-installation.md)**, the literal name reaching the server carries a per-installation suffix derived from the schema name — page ids restart at 1 in every installation, so `stardust_sweep_page_1` was the most collision-prone lock name in the engine on shared hosting before this; the base name and the zero-second timeout stated here remain normative and unchanged.
 2. Each worker mints its own per-process `worker_identity` (`host:pid:uuid`), which rides every event it emits, since the event stream alone can no longer distinguish which of N processes did what. `correlation_id` remains a per-*cycle* UUID as before — it does not change meaning, and does not correlate across workers.
 
 ### Sweep correctness
@@ -77,9 +77,11 @@ flowchart TD
     L1["Poll: SELECT slot_assignment_id, page_id, slot_column, sweep_cursor_id\nFROM stardust_slot_assignments\nWHERE status = 'tombstoned'\nORDER BY tombstoned_at ASC, page_id, slot_column"] --> L2{"Rows claimed?"}
     L2 -- No --> L3["Sleep idle_interval"]
     L3 --> L1
-    L2 -- Yes --> L4["For each tombstoned slot:"]
-    L4 --> L5["Emit sweep_started"]
-    L5 --> L6["BEGIN TX"]
+    L2 -- Yes --> L4["For each tombstoned slot in batch:"]
+    L4 --> LG1{"GET_LOCK('stardust_sweep_page_{pageId}', 0)?"}
+    LG1 -- Contended --> LG2["Count slots_contended"]
+    LG2 --> L16{"More tombstoned slots\nin this batch?"}
+    LG1 -- Acquired --> L6["BEGIN TX"]
     L6 --> L7["UPDATE entry_slots_page_X\nSET <slot_column> = NULL\nWHERE id > sweep_cursor_id\nLIMIT 500"]
     L7 --> L8["UPDATE stardust_slot_assignments\nSET sweep_cursor_id = MAX(id processed)\nWHERE slot_assignment_id = ?"]
     L8 --> L9{"Last chunk?\n(rows_affected < 500)"}
@@ -87,21 +89,27 @@ flowchart TD
     L10 --> L11["Emit sweep_chunk"]
     L11 --> L12["Sleep inter_chunk_delay"]
     L12 --> L7
-    L9 -- Yes --> L13["UPDATE stardust_slot_assignments\nSET status = 'free', field_id = NULL\nWHERE slot_assignment_id = ?"]
+    L9 -- "Yes, no gap this pass" --> L13["UPDATE stardust_slot_assignments\nSET status = 'free', field_id = NULL\nWHERE slot_assignment_id = ?"]
     L13 --> L14["COMMIT"]
     L14 --> L15["Emit sweep_complete"]
-    L15 --> L16{"More tombstoned slots\nin this batch?"}
+    L15 --> LR1["RELEASE_LOCK (finally)"]
+    L9 -- "Yes, gap outstanding" --> L13B["Leave status = 'tombstoned'\n(no sweep_complete)"]
+    L13B --> LR1
+    LR1 --> L16
     L16 -- Yes --> L4
-    L16 -- No --> L1
+    L16 -- No --> L22{"Slots claimed\nthis cycle > 0?"}
+    L22 -- Yes --> L23["Emit sweep_started\n{batch_size, slots_claimed, slots_contended}"]
+    L23 --> L1
+    L22 -- No --> L1
 
     %% Failure branch
     L7 -.SQLSTATE 40001.-> L17["ROLLBACK"]
     L17 --> L18["Emit deadlock_retry"]
     L18 --> L19{"Retry count\n< 3?"}
     L19 -- Yes --> L12
-    L19 -- No --> L20["Emit sweep_gap_flagged\n+ annotate registry row"]
-    L20 --> L21["Advance cursor by LIMIT"]
-    L21 --> L7
+    L19 -- No --> L20["Emit sweep_gap_flagged\n+ pin sweep_cursor_id at first gap"]
+    L20 --> L21["Gap pins and stops:\nslot stays tombstoned this cycle"]
+    L21 --> LR1
 ```
 
 **Key decisions:**

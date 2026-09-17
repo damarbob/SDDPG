@@ -116,16 +116,18 @@ SDDPG/
 
 ## Deployment Requirements
 
-StarDust requires a deployment target that supports persistent background processes — the engine ships four supervised daemons (Watcher, Reconciler, Liberator, Chronicler) that are expected to run continuously, not as cron-triggered one-shots. The supported targets are VPS deployments (systemd / supervisor / equivalent) and containerized deployments (Docker, Kubernetes, etc.). Free shared hosting that disallows long-running processes is structurally unsupported.
+StarDust supports two deployment models. The reference model runs the engine's four background daemons (Watcher, Reconciler, Liberator, Chronicler) as supervised long-running processes — VPS deployments (systemd / supervisor / equivalent) and containerized deployments (Docker, Kubernetes, etc.) both qualify. The second model, for a host with no persistent-process capability such as cron-only shared hosting, is the bounded `bin/stardust tick` command (ADR [`0048`](adrs/0048-bounded-combined-tick-for-cron-driven-hosting.md)): one process, one connection, composing the Watcher, Liberator and Reconciler over a fixed time budget on a schedule (a crontab line or a scheduled URL fetch), rather than running continuously. This mode covers three of the four daemons — async exports remain unsupported under it until an operator opts into the ADR [`0050`](adrs/0050-chronicler-cooperative-yield-at-a-chunk-boundary.md) cooperative yield via `--exports`. A host that can support neither model is structurally unsupported.
 
-A supported host MUST provide:
+A host supporting the reference (persistent-process) model MUST provide:
 
 - The ability to run persistent background processes or long-running containers.
 - MySQL 8.0.13+ or Percona Server 8.0.13+.
 - PHP 8.x with CLI access (required by the `bin/stardust` entry point).
 - Local filesystem write access for export artifacts (a mounted volume in container deployments).
 
-See [`adrs/0027-persistent-process-daemon-execution-model.md`](adrs/0027-persistent-process-daemon-execution-model.md) for the full rationale, the deployment tier matrix, and the status of cron-driven execution (deferred, not foreclosed).
+A host supporting the bounded-tick model instead needs MySQL 8.0.13+ or Percona Server 8.0.13+, PHP 8.x with CLI access or a scheduled URL fetch, and local filesystem write access for export artifacts if `--exports` is used.
+
+See [`adrs/0027-persistent-process-daemon-execution-model.md`](adrs/0027-persistent-process-daemon-execution-model.md) for the persistent-process model's full rationale and deployment tier matrix, and [`adrs/0048-bounded-combined-tick-for-cron-driven-hosting.md`](adrs/0048-bounded-combined-tick-for-cron-driven-hosting.md) for the bounded-tick model that ships the cron-driven execution 0027 deferred, not foreclosed.
 
 ## Conventions
 

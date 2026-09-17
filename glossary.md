@@ -9,9 +9,17 @@
 
 ### Advisory Lock
 
-A MySQL `GET_LOCK()` call used for mutual exclusion during page provisioning. The Watcher acquires an advisory lock before executing DDL, so concurrent provisioning attempts cannot cause table name collisions or metadata lock contention. Specified by [ADR 0008](adrs/0008-singleton-watcher-multi-worker-reconciler.md); the exact lock name and timeout value live in code, not in any ADR.
+A MySQL `GET_LOCK()` call used for mutual exclusion. The engine takes two: the Watcher's `stardust_page_provision` lock, held before executing page-provisioning DDL so concurrent provisioning attempts cannot cause table name collisions or metadata lock contention ([`blueprints/watcher_reconciler_daemons.md`](blueprints/watcher_reconciler_daemons.md) AC#2), and the Liberator's per-page `stardust_sweep_page_{pageId}` lock, held while sweeping one `entry_slots_page_X` table so two workers never nullify the same page at once ([ADR 0049](adrs/0049-multi-worker-liberator-excluded-per-page.md)). Both lock names and their timeouts (10 seconds for provisioning, zero for a sweep) are now normative — not merely code, as this entry previously said. Per [ADR 0053](adrs/0053-advisory-lock-names-are-qualified-per-installation.md), the literal name reaching the server also carries a per-installation suffix derived from the schema name, so unrelated installations sharing one MySQL server never contend on each other's lock — see Lock Namespace.
 
-**See also:** The Watcher, Page, [ADR 0008](adrs/0008-singleton-watcher-multi-worker-reconciler.md).
+**See also:** The Watcher, The Liberator, Lock Namespace, Page, [ADR 0008](adrs/0008-singleton-watcher-multi-worker-reconciler.md), [ADR 0049](adrs/0049-multi-worker-liberator-excluded-per-page.md), [ADR 0053](adrs/0053-advisory-lock-names-are-qualified-per-installation.md).
+
+---
+
+### Advisory Schedule
+
+The single-row `stardust_advisory_schedule` table holding the due time of the next Watcher advisory sample (the Coercion Failure-adjacent cardinality and Spread samples), introduced by [ADR 0052](adrs/0052-the-advisory-schedule-is-persisted-and-fleet-wide.md). It breaks the pattern every other `stardust_*` glossary entry follows of one entry per table with a matching structural role, because it is not a coordination contract table like the Schema Registry or a work queue like `stardust_sync_queue` — it exists solely so a process that exits after every invocation (the bounded tick, see Combined Tick) can still find out whether a sample is due, which an in-memory schedule cannot survive. The schedule is fleet-wide: one sample fires per interval across every process sharing the deployment, not one per daemon, decided by a single conditional `UPDATE` whose affected-row count is the claim itself.
+
+**See also:** The Watcher, Spread, Combined Tick, [ADR 0052](adrs/0052-the-advisory-schedule-is-persisted-and-fleet-wide.md), [ADR 0019](adrs/0019-index-cardinality-policy.md).
 
 ---
 
@@ -79,6 +87,22 @@ The 4×4 lookup table governing how a JSON payload value converts between the fo
 
 **Aliases:** Type Coercion Matrix.
 **See also:** Coercion Failure, Model Compaction, The Reconciler, [ADR 0024](adrs/0024-type-coercion-matrix-for-retype-backfill.md), [ADR 0016](adrs/0016-field-type-change-lifecycle.md).
+
+---
+
+### Combined Tick
+
+The bounded, budget-limited daemon run (`bin/stardust tick`) introduced by [ADR 0048](adrs/0048-bounded-combined-tick-for-cron-driven-hosting.md) for a host with no persistent-process capability, such as cron-only shared hosting. One process, one MySQL connection: it takes the Watcher's own singleton lock, runs the Watcher once, then loops sweeping one Liberator batch and one Reconciler round per iteration until a time budget is spent, a round finds nothing to do, or shutdown is requested. It composes three of the four daemons — the Chronicler is opt-in via `--exports`, bounded by its own Cooperative Yield. Because every daemon it composes already checkpoints its state to the database, a bounded pass is structurally equivalent to a daemon that crashes and restarts, which is what makes the run safe to invoke repeatedly from a crontab line or a scheduled URL fetch.
+
+**See also:** The Watcher, The Reconciler, The Liberator, Cooperative Yield, [ADR 0048](adrs/0048-bounded-combined-tick-for-cron-driven-hosting.md).
+
+---
+
+### Cooperative Yield
+
+The mechanism by which an in-progress Chronicler export gives up its claim at a committed chunk boundary rather than running to completion, introduced by [ADR 0050](adrs/0050-chronicler-cooperative-yield-at-a-chunk-boundary.md). After a non-final chunk commits, the worker consults a yield signal (a time budget, in Combined Tick's case, or the daemon's own shutdown signal); if it fires, the same transaction sets the job back to `pending` with `worker_identity = NULL` and emits `job_yielded`, leaving the Resume Anchor intact so any worker can pick the job back up at its next poll. This is what lets an export whose total size is unknown in advance be bounded by a Combined Tick run without either abandoning it mid-file or letting it consume the whole budget.
+
+**See also:** The Chronicler, Combined Tick, Resume Anchor, [ADR 0050](adrs/0050-chronicler-cooperative-yield-at-a-chunk-boundary.md).
 
 ---
 
@@ -222,6 +246,14 @@ The deterministic, schema-driven rules governing which extension table slots rec
 
 ---
 
+### Lock Namespace
+
+The per-installation suffix appended to an Advisory Lock's literal name before it reaches MySQL, introduced by [ADR 0053](adrs/0053-advisory-lock-names-are-qualified-per-installation.md). It exists because `GET_LOCK` names are scoped to the whole MySQL server, not to a schema, so on a shared host running several StarDust installations against one `mysqld`, an unqualified name let one installation's Watcher or Liberator block on a stranger's lock — a liveness defect, worst on the Liberator's per-page lock, since page ids restart at 1 in every installation. The default suffix derives from the connected schema name, so the fix needs no configuration; an operator can override it to keep one lock identity across a database rename, or to deliberately share one across installations.
+
+**See also:** Advisory Lock, The Watcher, The Liberator, [ADR 0053](adrs/0053-advisory-lock-names-are-qualified-per-installation.md).
+
+---
+
 ### Model
 
 A user-defined data structure (schema) within a tenant, identified by `model_id`. A model defines the set of fields, their types, and their slot mappings in extension tables. All entries belong to exactly one model.
@@ -297,6 +329,14 @@ The write-path component responsible for separating an entry's data into two des
 The function API's strict enforcement mechanism for unindexed filter attempts. If a caller requests a filter or sort on a field lacking `is_filterable = true` in the schema registry, the call is immediately aborted at the API boundary with a typed exception before the database is ever touched. This replaces the earlier "Scanned Row Circuit Breaker" concept.
 
 **See also:** `is_filterable`, Index Provisioning Policy, ~~Scanned Row Circuit Breaker~~.
+
+---
+
+### Resume Anchor
+
+The unit an interrupted Chronicler export resumes from, pinned by [ADR 0047](adrs/0047-the-export-resume-anchor-is-the-artifact-plus-its-byte-offset.md) as the artifact file itself plus its verified byte offset — not the `last_cursor` column trusted alone. On an abandoned-claim re-claim or a Cooperative Yield resume, the new worker re-opens the prior partial artifact, verifies it actually holds at least the recorded byte count (and, for CSV, that its header still matches the current field set), and only then truncates to that offset and continues from `last_cursor`. Verification failing — a missing file, a short one, a header mismatch, or an unavailable file lock — discards the anchor and restarts the artifact from byte zero rather than risking a corrupt append.
+
+**See also:** The Chronicler, Cooperative Yield, `stardust_export_jobs`, [ADR 0047](adrs/0047-the-export-resume-anchor-is-the-artifact-plus-its-byte-offset.md).
 
 ---
 
@@ -432,9 +472,9 @@ An independent background PHP daemon responsible exclusively for materializing e
 
 ### The Liberator
 
-An independent background PHP daemon responsible exclusively for sweeping dead or demoted slots to prevent Slot Squatting. It monitors the schema registry for tombstoned slots and reclaims them using chunked DML nullification without locking tables, ultimately marking them as safely `free` for future indexing needs.
+A background PHP CLI daemon (`bin/stardust liberator`) responsible exclusively for sweeping dead or demoted slots to prevent Slot Squatting. It monitors the schema registry for tombstoned slots and reclaims them using chunked DML nullification, ultimately marking them as safely `free` for future indexing needs. Since [ADR 0049](adrs/0049-multi-worker-liberator-excluded-per-page.md), multiple Liberator processes can run at once — it is neither a strict singleton like the Watcher nor unconstrained multi-worker like the Reconciler, but a third category: any number of workers may run, excluded from each other only at page-table granularity via a per-page Advisory Lock, so two workers never sweep the same `entry_slots_page_X` table concurrently.
 
-**See also:** Slot Squatting, Tombstoned Slot, Schema Registry.
+**See also:** Slot Squatting, Tombstoned Slot, Schema Registry, Advisory Lock.
 
 ---
 
