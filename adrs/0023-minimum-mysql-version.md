@@ -32,6 +32,8 @@ Picking 8.0.13 captures the entire feature set the architecture already assumes 
 
 - **MySQL 5.7 and earlier**: explicitly unsupported. The partial-unique workaround is removed; ADR `0011`'s SAVEPOINT semantics are weaker; `JSON_TABLE` is unavailable.
 - **MariaDB**: not supported as a drop-in replacement. MariaDB's JSON storage representation and partial-index syntax differ enough that targeting it would be a separate ADR with its own compatibility matrix.
+
+  **Note (2026-09-19):** see [ADR `0054`](0054-mariadb-10-11-support-floor.md), which supports MariaDB 10.11+ as a second engine with one documented behavioural divergence, without changing this ADR's MySQL floor. MariaDB 10.6 and earlier remain unsupported.
 - **Percona Server**: supported because it is wire- and feature-compatible with the corresponding upstream MySQL version. Operators running Percona 8.0.13+ are inside the supported envelope.
 
 ### Documentation Updates
@@ -73,3 +75,4 @@ Nothing. ADRs in the project are still in flux (this ADR, like all current ADRs,
 - ADR `0011` — Chunked Bulk Ingestion (uses SAVEPOINT semantics, present in 8.0.13)
 - ADR `0017` — Schema Registry as Coordination Contract (relies on the partial unique index)
 - [`schemas/schema_reference.md`](../schemas/schema_reference.md) §4.4
+- [ADR `0054`](0054-mariadb-10-11-support-floor.md) — Narrows the MariaDB exclusion above for the 10.11+ line specifically
