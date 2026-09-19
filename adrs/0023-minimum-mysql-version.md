@@ -23,7 +23,6 @@ The generated-column workaround documented in [`schemas/schema_reference.md`](..
 
 - Functional / conditional unique indexes (the registry constraint).
 - `JSON_TABLE` (used in legacy-data-migration tooling — out of scope here, but the version requirement aligns).
-- `WITH ... AS (...)` common table expressions (used in registry diagnostic queries).
 
 Picking 8.0.13 captures the entire feature set the architecture already assumes without imposing a more recent floor than necessary.
 
@@ -32,7 +31,7 @@ Picking 8.0.13 captures the entire feature set the architecture already assumes 
 ### Out-of-scope versions
 
 - **MySQL 5.7 and earlier**: explicitly unsupported. The partial-unique workaround is removed; ADR `0011`'s SAVEPOINT semantics are weaker; `JSON_TABLE` is unavailable.
-- **MariaDB**: not supported as a drop-in replacement. MariaDB's JSON storage representation, partial-index syntax, and `SKIP LOCKED` semantics differ enough that targeting it would be a separate ADR with its own compatibility matrix.
+- **MariaDB**: not supported as a drop-in replacement. MariaDB's JSON storage representation and partial-index syntax differ enough that targeting it would be a separate ADR with its own compatibility matrix.
 - **Percona Server**: supported because it is wire- and feature-compatible with the corresponding upstream MySQL version. Operators running Percona 8.0.13+ are inside the supported envelope.
 
 ### Documentation Updates
