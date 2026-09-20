@@ -1,6 +1,6 @@
 # 0055 - The Target Engine Is Detected, Not Declared
 
-**Status:** Proposed
+**Status:** Accepted
 **Created:** 2026-09-20
 
 ## Context
