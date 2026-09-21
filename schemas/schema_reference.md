@@ -321,7 +321,7 @@ The authoritative field-to-slot mapping. One row per physical slot column per pa
 - `INDEX (page_id, status)` — supports per-page capacity accounting.
 
 > [!NOTE]
-> The partial unique index `UNIQUE (field_id) WHERE status IN ('assigned', 'backfilling', 'ready')` requires MySQL 8.0.13 or newer. **MySQL 8.0.13 is the project minimum** per ADR [`0023`](../adrs/0023-minimum-mysql-version.md); the previously documented generated-column workaround for older versions has been removed and is no longer a supported configuration.
+> The partial unique index `UNIQUE (field_id) WHERE status IN ('assigned', 'backfilling', 'ready')` requires MySQL 8.0.13 or newer. **MySQL 8.0.13 is the project minimum** per ADR [`0023`](../adrs/0023-minimum-mysql-version.md); the previously documented generated-column workaround for *older MySQL* has been removed and is no longer a supported configuration. This is a different construct from the generated-column substitute ADR [`0054`](../adrs/0054-mariadb-10-11-support-floor.md)/[`0055`](../adrs/0055-target-engine-is-detected-not-declared.md) later added for **MariaDB 10.11+**, which remains supported — the two should not be conflated.
 
 ### 4.5 Slot Status State Machine
 

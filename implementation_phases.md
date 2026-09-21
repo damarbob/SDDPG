@@ -97,7 +97,7 @@ Two constraints apply to every phase and must not regress once established:
 
 - [ ] `composer install` completes against a fresh checkout with no warnings about missing extensions or unresolved dependencies.
 - [ ] A smoke-test query confirms partial unique indexes are supported: `CREATE UNIQUE INDEX … WHERE …` succeeds.
-- [ ] MariaDB rejection: the same smoke suite exits non-zero when pointed at a MariaDB instance.
+- [ ] MariaDB rejection: the same smoke suite exits non-zero when pointed at a MariaDB instance. *(Dated note, 2026-09-21: true as written at Phase 0, when MariaDB was rejected at every version. ADR 0054/0055 later added MariaDB 10.11+ as a supported engine; the suite now rejects only MariaDB 10.6 and older. This exit criterion is left as history, not rewritten — see ADR 0054/0055 for the current floor.)*
 - [ ] `composer.json` has zero entries under `require` other than `php`, the `ext-pdo` / `ext-pdo_mysql` extensions, `psr/log`, and `psr/clock` (the two interface-only packages explicitly permitted by [ADR 0026](adrs/0026-framework-neutral-composer-packaging.md)).
 
 ---

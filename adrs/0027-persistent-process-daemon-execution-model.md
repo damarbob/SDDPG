@@ -35,7 +35,7 @@ A cron-driven `--once` / single-pass invocation mode is **deliberately deferred,
 A supported deployment target MUST provide all of:
 
 1. The ability to run **persistent background processes or long-running containers** (not bounded-runtime invocations such as cron-only shared hosting).
-2. MySQL 8.0.13+ or Percona 8.0.13+ ([ADR `0023`](0023-minimum-mysql-version.md)).
+2. MySQL 8.0.13+ or Percona 8.0.13+ ([ADR `0023`](0023-minimum-mysql-version.md)), or MariaDB 10.11+ ([ADR `0054`](0054-mariadb-10-11-support-floor.md)/[`0055`](0055-target-engine-is-detected-not-declared.md)).
 3. PHP 8.x with CLI access (required by the `bin/stardust` entry point per [ADR `0026`](0026-framework-neutral-composer-packaging.md)).
 4. Local filesystem write access for the Chronicler's export artifacts (a mounted volume in container deployments).
 5. PID-file or container-orchestrator-level enforcement of Watcher singleton execution (the in-DB `GET_LOCK` advisory lock is the safety net, not the primary enforcement).

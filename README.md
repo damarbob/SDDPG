@@ -121,11 +121,11 @@ StarDust supports two deployment models. The reference model runs the engine's f
 A host supporting the reference (persistent-process) model MUST provide:
 
 - The ability to run persistent background processes or long-running containers.
-- MySQL 8.0.13+ or Percona Server 8.0.13+.
+- MySQL 8.0.13+ or Percona Server 8.0.13+, or MariaDB 10.11+ ([ADR `0054`](adrs/0054-mariadb-10-11-support-floor.md)/[`0055`](adrs/0055-target-engine-is-detected-not-declared.md)) — the target engine is detected from the live connection, never configured.
 - PHP 8.x with CLI access (required by the `bin/stardust` entry point).
 - Local filesystem write access for export artifacts (a mounted volume in container deployments).
 
-A host supporting the bounded-tick model instead needs MySQL 8.0.13+ or Percona Server 8.0.13+, PHP 8.x with CLI access or a scheduled URL fetch, and local filesystem write access for export artifacts if `--exports` is used.
+A host supporting the bounded-tick model instead needs MySQL 8.0.13+ or Percona Server 8.0.13+ or MariaDB 10.11+, PHP 8.x with CLI access or a scheduled URL fetch, and local filesystem write access for export artifacts if `--exports` is used.
 
 See [`adrs/0027-persistent-process-daemon-execution-model.md`](adrs/0027-persistent-process-daemon-execution-model.md) for the persistent-process model's full rationale and deployment tier matrix, and [`adrs/0048-bounded-combined-tick-for-cron-driven-hosting.md`](adrs/0048-bounded-combined-tick-for-cron-driven-hosting.md) for the bounded-tick model that ships the cron-driven execution 0027 deferred, not foreclosed.
 
