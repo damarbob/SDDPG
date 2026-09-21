@@ -45,7 +45,8 @@
       "additionalProperties": false
     },
     "scalarValue": {
-      "type": ["string", "number", "boolean"]
+      "type": ["string", "number", "boolean"],
+      "maxLength": 4096
     },
     "andNode": {
       "type": "object",
