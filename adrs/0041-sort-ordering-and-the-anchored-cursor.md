@@ -95,7 +95,7 @@ This is a factual correction to an `Accepted` ADR and changes what code someone 
 
 ### Scoping `0005`
 
-[`0005`](0005-two-query-bounded-read-path.md) guarantees a two-query read in which each query touches a bounded number of rows. That is now **true of query 2 always, and of query 1 only for intrinsic sorts.** Measured on 8.0.13 against the real compiled SQL, 5 000 rows:
+[`0005`](0005-two-query-bounded-read-path.md) guarantees a two-query read in which each query touches a bounded number of rows. That is now **true of query 2 always, and of query 1 only for intrinsic sorts on an unfiltered read.** Measured on 8.0.13 against the real compiled SQL, 5 000 rows:
 
 | Shape | Plan | Rows examined |
 | :-- | :-- | :-- |
@@ -107,6 +107,16 @@ This is a factual correction to an `Accepted` ADR and changes what code someone 
 The anchor lookup itself is free: it plans as `SUBQUERY … const` inside a `system` derived table — evaluated **once**, not per row. That is why the uncorrelated form (binding `tenant_id` rather than correlating to `entry_data.tenant_id`) is required and not merely tidier.
 
 A field sort therefore discovers each page by scanning the whole filtered set. The query count is unchanged at two, and materialisation stays bounded to `pageSize` rows. Ordering by a slot column cannot use its index while the query leads with `entry_data`, so this is inherent to the join order rather than a missing optimisation.
+
+**Correction, 2026-10-26.** The table above has no filter in it, and a filtered read in the default ordering was not bounded either. Measured with handler counters on MySQL 8.0.46, 200 000 rows, page size 50, an equality on an integer slot, ascending, page 1, against the compiled SQL of the time and then against the shape [`0056`](0056-filtered-default-order-reads-drive-from-a-full-width-equality-leaf.md) adds:
+
+| Filter matches | Rows touched, before | Rows touched, after |
+| :-- | :-- | :-- |
+| 5% of the tenant | 10 161, with 51 sorted | 102, none sorted |
+| 25% | 352 | 102 |
+| 50% | 222 | 102 |
+
+The 5% row is the one that mattered: a filter that matched a few percent of a tenant read the whole match set to produce each page. Equality on an integer, numeric or datetime slot is now bounded. String equality, ranges, `in` and filters containing OR or NOT are not, and 0056 records why.
 
 ## Consequences
 
