@@ -13,7 +13,7 @@ The same pattern appears on page 10 as well as page 1, ascending and descending,
 
 ## Decision
 
-When the filter is a pure AND (the join strategy), the sort is the default order or `Id`, and at least one leaf is an equality on a full-width slot column, the compiler drives the query from that leaf's page. Full width means an integer, numeric or datetime slot. The leaf must have an index recorded in the schema snapshot, and the first such leaf in filter order is used.
+When the filter is a pure AND (the join strategy), the sort is the default order or `Id`, and at least one leaf is an equality on a full-width slot column, the compiler drives the query from that leaf's page. Full width means an integer, numeric or datetime slot. The leaf must have an index recorded in the schema snapshot, and the first such leaf in filter order is used. A string equality qualifies only when no such leaf exists and its page has a generated key ([`0057`](0057-string-slots-are-indexed-through-a-generated-key.md)), through the second pass described under "Text equality".
 
 ```sql
 SELECT STRAIGHT_JOIN entry_data.id
@@ -34,12 +34,12 @@ Each part of the shape below was measured, except the explicit tenant predicate,
 - **`p0.tenant_id = ?` is stated explicitly**, so the index range is bounded by both of its key parts.
 - **The index name comes from the data dictionary, read into the schema snapshot, and is never built from the `ix_{table}_{column}` convention.** A page from before [`0043`](0043-pages-provision-only-indexed-columns.md), or an index an operator added, may carry any name. A hint naming a missing index fails the read with errno 1176, which turns a slow read into a failing one. An index qualifies only if it has exactly two key parts, `tenant_id` and then the slot column, both at full width, and the optimiser has not been told to skip it. A third key part would sit between the column and `entry_id` and break the order.
 
-Everything else keeps today's SQL byte for byte: the EXISTS strategy, field sorts and `created_at` sorts, string leaves, ranges, `prefix`, `in` and `nin`, and any leaf without a recorded index.
+Everything else keeps today's SQL byte for byte: the EXISTS strategy, field sorts and `created_at` sorts, string leaves on a page without a key, ranges, `prefix`, `in` and `nin`, and any leaf without a recorded index.
 
 ### What does not take the shape
 
 - **`in` and `nin`.** Ordering by the page's `entry_id` took a list matching 50% of the tenant from 238 rows touched to 200 001, and adding the hint left it at 49 936 touched with 49 875 sorted.
-- **String equality.** A string slot is indexed on a 766 character prefix, which cannot answer an equality alone. Driving from it with the hint touched 5 037 rows and sorted 4 985, where today's shape touched 9 971 and sorted 51. A string leaf is never chosen as the driving leaf, even when it comes first: in `str5% AND int5%`, driving from the string leaf touched 7 101 rows and sorted 4 990, and driving from the integer leaf touched 3 132 and sorted none.
+- **String equality on a prefix index.** A string slot indexed on a 766 character prefix cannot answer an equality alone. Driving from it with the hint touched 5 037 rows and sorted 4 985, where today's shape touched 9 971 and sorted 51. A string leaf on such a page is never chosen as the driving leaf, even when it comes first: in `str5% AND int5%`, driving from the string leaf touched 7 101 rows and sorted 4 990, and driving from the integer leaf touched 3 132 and sorted none. A page built after [`0057`](0057-string-slots-are-indexed-through-a-generated-key.md) indexes the slot through a generated key instead, and the second pass under "Text equality" covers it.
 - **Ranges.** A greater-than matching 5% of the tenant gained nothing from the hint (5 006 rows touched, 4 954 sorted).
 
 ## How this narrows 0005
@@ -48,12 +48,12 @@ For the filtered default-order read, the probe's bounded-discovery guarantee now
 
 - **One full-width equality:** bounded by about the page size. In all 44 cases measured on each of MySQL 8.0.13, MySQL 8.0.46, MariaDB 10.11 and MariaDB 11 the shape touched 102 rows and sorted none. The cases cover integer, numeric and datetime equality at 5%, 25% and 50% matches, ascending and descending, on page 1 and page 10, driving from the first or second joined page.
 - **An equality inside an AND:** bounded by the driving leaf's match count, not by the page size, once the other leaves filter its rows further. On MySQL 8.0.46, two 25% integer equalities on different pages touched 519 rows, against 225 092 for the hint alone. An integer 5% equality with a string 5% equality touched 2 673, against 10 412 today.
-- **Still not bounded:** string equality, ranges, `in`, `nin`, `prefix`, and any filter containing OR or NOT, which uses the EXISTS strategy and was not measured.
+- **Still not bounded:** string equality on a page without a key, ranges, `in`, `nin`, `prefix`, and any filter containing OR or NOT, which uses the EXISTS strategy and was not measured.
 - **Field sorts** are as [`0041`](0041-sort-ordering-and-the-anchored-cursor.md) left them.
 
-## Open case: text equality
+## Text equality
 
-String equality is outside this rule and stays unbounded on MySQL until its schema changes. The prefix index is the obstacle, and removing it is a page-shape change that needs its own decision record. When that lands, this rule extends to it by letting a string leaf drive from whatever full-width key replaces the prefix index.
+String equality on a prefix index is outside this rule and stays unbounded on MySQL. The prefix index is the obstacle, and [`0057`](0057-string-slots-are-indexed-through-a-generated-key.md) removes it on pages built after that record by indexing a generated key instead. This rule extends to such a page with a second pass. The first pass is the one above and is unchanged. Only when it finds no leaf does the second pass take the first `eq` on a string slot whose page has a key, and the hint names that key's index. An integer, numeric or datetime equality therefore still drives when a string equality is written before it, and every query that drives today keeps its plan.
 
 ## Consequences
 
@@ -68,4 +68,4 @@ String equality is outside this rule and stays unbounded on MySQL until its sche
 - One extra query when a schema snapshot is refreshed, reading the page indexes from `information_schema.STATISTICS`. A warm read pays nothing, because the snapshot is cached per schema version.
 - Dropping or hiding a page index without bumping `stardust_schema_version` leaves a stale name in the cache, and a read that names it fails with errno 1176 until the next refresh. Nothing in the engine drops a page index, so only a hand-run `ALTER TABLE` can cause it.
 - The driving leaf is the first qualifying leaf in filter order, not the most selective one, because the compiler does not know selectivity. In an AND the cost follows that leaf's match count. Every qualifying leaf tried was bounded, but a broader leaf written first costs more than a narrower one written second. In a measured case, a leaf matching 50 008 entries written before one matching 10 touched 150 025 rows on MySQL 8.0.46 and on MariaDB 11.8, against 25 and 31 for today's query. With the rare leaf first it touched 31.
-- The MySQL 8.0.13 floor was measured for integer, numeric and datetime equality and behaved like 8.0.46. Text equality alone has no 8.0.13 measurement. String-led AND filters were measured there, and driving from the string touched 3 165 rows and sorted none, against 7 101 and 4 990 sorted on 8.0.46. The rule never drives from a string, so the decision is unchanged.
+- The MySQL 8.0.13 floor was measured for integer, numeric and datetime equality and behaved like 8.0.46. Text equality alone has no 8.0.13 measurement. String-led AND filters were measured there, and driving from the string touched 3 165 rows and sorted none, against 7 101 and 4 990 sorted on 8.0.46. The first pass never drives from a string, so the decision is unchanged. The second pass drives from a key only, and [`0057`](0057-string-slots-are-indexed-through-a-generated-key.md) records that measurement on 8.0.13.
