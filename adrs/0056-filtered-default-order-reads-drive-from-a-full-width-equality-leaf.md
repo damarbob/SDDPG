@@ -27,7 +27,7 @@ LIMIT ?
 
 Page aliases are assigned as they are today, so the driving page keeps its alias even when it is not `p0`, and only the order the tables are written in changes. The keyset predicate and the `ORDER BY` move from `entry_data.id` to the driving page's `entry_id`. The `INNER JOIN` forces the two to be equal, so the ordering is the same and the cursor format is unchanged.
 
-Each part of the shape is there for a measured reason, and none can be dropped alone.
+Each part of the shape below was measured, except the explicit tenant predicate, which is a precaution (removing it changed no count in 32 pairs on each of MySQL 8.0.46 and MariaDB 11.8).
 
 - **The join order is pinned with `STRAIGHT_JOIN`, driving page first.** The hint on its own is not enough. With `FROM entry_data` still first, a single equality matching 50% of the tenant went from 222 rows touched to 200 001 on MySQL 8.0.46 (300 069 on 8.0.13), with a sort, because the optimiser starts from `entry_data` and sorts the whole join.
 - **`FORCE INDEX` names the leaf's own index.** Without it, with a string leaf in the same AND, ordering by the page's `entry_id` touched 13 618 rows against 768 with it (MySQL 8.0.46, 200 000 rows, 915 matches).
@@ -61,11 +61,11 @@ String equality is outside this rule and stays unbounded on MySQL until its sche
 
 - A filtered read on an integer, numeric or datetime equality examines about a page of rows on every supported engine, however large the match set.
 - The change is local to the compiler and the snapshot. The cursor format, `PaginatedProbe`, the bounded fetch, `SearchService` and every public signature are unchanged, and `compile_strategy` still reports `joins`.
-- MariaDB gains little, since it is already close to a page in the cases measured. **A green MariaDB run therefore proves nothing about the rewrite**, and the tests pin the shape of the SQL as well as the rows touched.
+- MariaDB gains little, since it is already close to a page in the cases measured, and it can lose when a common leaf is written first (MariaDB 11.8, a 5% leaf second, 324 rows touched today against 3 231 driven). **A green MariaDB run therefore proves nothing about the rewrite**, and the tests pin the shape of the SQL as well as the rows touched.
 
 **Negative:**
 
 - One extra query when a schema snapshot is refreshed, reading the page indexes from `information_schema.STATISTICS`. A warm read pays nothing, because the snapshot is cached per schema version.
 - Dropping or hiding a page index without bumping `stardust_schema_version` leaves a stale name in the cache, and a read that names it fails with errno 1176 until the next refresh. Nothing in the engine drops a page index, so only a hand-run `ALTER TABLE` can cause it.
-- The driving leaf is the first qualifying leaf in filter order, not the most selective one, because the compiler does not know selectivity. In an AND the cost follows that leaf's match count. Every qualifying leaf tried was bounded, but a broader leaf written first costs more than a narrower one written second.
-- The MySQL 8.0.13 floor was measured for integer, numeric and datetime equality and behaved like 8.0.46. Text equality has no 8.0.13 measurement.
+- The driving leaf is the first qualifying leaf in filter order, not the most selective one, because the compiler does not know selectivity. In an AND the cost follows that leaf's match count. Every qualifying leaf tried was bounded, but a broader leaf written first costs more than a narrower one written second. In a measured case, a leaf matching 50 008 entries written before one matching 4 touched 150 025 rows on MySQL 8.0.46 and on MariaDB 11.8, against 25 and 31 for today's query. With the rare leaf first it touched 31.
+- The MySQL 8.0.13 floor was measured for integer, numeric and datetime equality and behaved like 8.0.46. Text equality alone has no 8.0.13 measurement. String-led AND filters were measured there, and driving from the string touched 3 165 rows and sorted none, against 7 101 and 4 990 sorted on 8.0.46. The rule never drives from a string, so the decision is unchanged.
