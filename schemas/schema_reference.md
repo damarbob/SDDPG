@@ -82,7 +82,8 @@ erDiagram
     entry_slots_page_X {
         BIGINT entry_id PK, FK "ON DELETE CASCADE"
         BIGINT tenant_id
-        TEXT i_str_01 "to i_str_25 (766-char prefix index, ADR 0030)"
+        TEXT i_str_01 "to i_str_25 (indexed through i_str_NN_k since ADR 0057, 766-char prefix index before it, ADR 0030)"
+        VARBINARY i_str_01_k "to i_str_25_k (stored generated key, pages built since ADR 0057)"
         BIGINT i_int_01 "to i_int_15"
         DOUBLE i_num_01 "to i_num_10"
         DATETIME i_dt_01 "to i_dt_10"
@@ -203,13 +204,28 @@ The primary transactional storage for all entries. It stores the complete, unind
 1:1 extension tables that store explicitly indexed fields for rapid filtering and lookup. A new page is dynamically provisioned when capacity runs low.
 
 > [!NOTE]
-> **String slot storage (ADR [`0030`](../adrs/0030-string-slot-storage-type-and-index-prefix.md)).** String slots are `TEXT` so they hold the full 4096-char QueryFilter string bound. `VARCHAR(4096)` is impossible — 25 such columns exceed MySQL's 65,535-byte row-definition limit (errno 1118). A filterable string slot's composite index covers a **766-char prefix** (`(tenant_id, i_str_NN(766))` = 3072 bytes, the InnoDB key limit under `ROW_FORMAT=DYNAMIC`, which the page DDL pins explicitly); MySQL rechecks the full value behind every prefix-index access, so all filter operators stay exact.
+> **String slot storage (ADR [`0030`](../adrs/0030-string-slot-storage-type-and-index-prefix.md)).** String slots are `TEXT` so they hold the full 4096-char QueryFilter string bound. `VARCHAR(4096)` is impossible — 25 such columns exceed MySQL's 65,535-byte row-definition limit (errno 1118). On a page built before ADR [`0057`](../adrs/0057-string-slots-are-indexed-through-a-generated-key.md), a filterable string slot's composite index covers a **766-char prefix** (`(tenant_id, i_str_NN(766))` = 3072 bytes, the InnoDB key limit under `ROW_FORMAT=DYNAMIC`, which the page DDL pins explicitly); MySQL rechecks the full value behind every prefix-index access, which keeps the operators exact for values that share their first 766 characters.
+>
+> **String slot keys (ADR [`0057`](../adrs/0057-string-slots-are-indexed-through-a-generated-key.md), `Proposed`).** A page built since then gives each string slot `i_str_NN` a companion `i_str_NN_k VARBINARY(48)`, a stored generated column holding the first 32 bytes of the slot's weight string (zero padded to 32) followed by the first 16 bytes of the SHA-256 digest of the whole weight string, and indexes `(tenant_id, i_str_NN_k)` under the same index name in place of the prefix. The key is NULL exactly when the slot is. It is not a slot: it has no `stardust_slot_assignments` row and the write path never names it. A page keeps the shape it was built with, so a deployment can hold sixty-column pages, prefix pages and key pages together, and the engine reads a page's shape from its table definition. The head width is the key column's width minus 16 and is never a constant in a lookup.
+>
+> ```sql
+> i_str_01   TEXT NULL DEFAULT NULL,
+> i_str_01_k VARBINARY(48) GENERATED ALWAYS AS (
+>     CONCAT(
+>         RPAD(LEFT(WEIGHT_STRING(i_str_01), 32), 32, UNHEX('00')),
+>         LEFT(UNHEX(SHA2(WEIGHT_STRING(i_str_01), 256)), 16)
+>     )
+> ) STORED,
+> ...
+> KEY ix_entry_slots_page_N_i_str_01 (tenant_id, i_str_01_k),
+> ```
 
 | Column                  | Type       | Description                                                                 |
 | :---------------------- | :--------- | :-------------------------------------------------------------------------- |
 | `entry_id`              | `BIGINT`   | Primary Key. Foreign Key referencing `entry_data.id` (`ON DELETE CASCADE`). |
 | `tenant_id`             | `BIGINT`   | Used to ensure `INNER JOIN` matches across pages are secure.                |
-| `i_str_01`...`i_str_25` | `TEXT`     | Indexed string slots; 766-char prefix index per ADR 0030 (see note above).  |
+| `i_str_01`...`i_str_25` | `TEXT`     | Indexed string slots; indexed through their key on pages built since ADR 0057, on a 766-char prefix before (see note above). |
+| `i_str_01_k`...`i_str_25_k` | `VARBINARY(48)` **NULL** | Stored generated key of the string slot beside it, on pages built since ADR 0057. Not a slot and not in the slot inventory. |
 | `i_int_01`...`i_int_15` | `BIGINT`   | Indexed integer slots.                                                      |
 | `i_num_01`...`i_num_10` | `DOUBLE`   | Indexed numeric (float/double) slots.                                       |
 | `i_dt_01`...`i_dt_10`   | `DATETIME` | Indexed date/time slots.                                                    |
