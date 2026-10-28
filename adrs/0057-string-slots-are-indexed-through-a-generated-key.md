@@ -53,7 +53,7 @@ The column is declared after the slot columns, the index keeps its name, and `RO
 
 One class owns the layout. `StringKeyLayout` holds the head width, the digest width, the column expression and every lookup predicate below, because a lookup that repeats the layout even slightly wrong returns wrong rows without raising an error. A test fails when `WEIGHT_STRING(` or `SHA2(` appears anywhere else in `src/`.
 
-A server whose `SHA2` returns NULL would give every row a NULL key and every equality zero rows, with no error. `provision()` therefore checks that `SELECT SHA2('x', 256)` returns 64 characters and refuses with `UnsupportedServerException` otherwise.
+A server whose `SHA2` returns NULL would give every row a NULL key and every equality zero rows, with no error. For a page with a string slot, `provision()` therefore checks before any DDL that `SELECT SHA2('x', 256)` returns 64 characters, and refuses with `UnsupportedServerException` otherwise. A page with no string slot has no key to compute and does not ask.
 
 ### How a lookup uses the key
 
@@ -81,7 +81,7 @@ Three things must hold or the lookup returns wrong rows without an error. The se
 
 It reads the shape from the data dictionary, the server's own description of the page table, and never from a column in the registry. The table is the only fact. A crash between a page's `CREATE TABLE` and the registry transaction can leave an orphan table that a later provisioning reuses by name (`CREATE TABLE IF NOT EXISTS`), so a registry flag could name a shape the table does not have, and the compiler would then fail on a column that is not there. [`0043`](0043-pages-provision-only-indexed-columns.md) rejected persisting `is_indexed` for the same reason, a denormalised copy of a dictionary fact. The head width and the collation are facts of the same kind. Keeping them out of the registry also means no registry migration.
 
-The schema snapshot already records, for every full-width two-part index, which column it covers. A key column qualifies as it stands. When that map holds a column ending in `_k`, one more query reads `information_schema.COLUMNS` for the page tables and takes the collation of each `i_str_NN` and the width of each `i_str_NN_k`, and the head is that width minus 16. A slot with no key compiles to today's SQL. That covers a slot on a prefix page, on a page from before 0043, and behind a key index an operator made invisible. The cost is one statement per cold snapshot refresh for a model that lives on key pages, and nothing on a warm read.
+The schema snapshot already records, for every full-width two-part index, which column it covers. A key column qualifies as it stands. When that map holds a column ending in `_k`, one more query reads `information_schema.COLUMNS` for the page tables and takes the collation of each `i_str_NN` and the width of each `i_str_NN_k`, and the head is that width minus 16. A slot with no key compiles to today's SQL. That covers a slot on a prefix page, on a page from before 0043, behind a key index an operator made invisible, behind a key column that is not a `VARBINARY`, and with a collation name that is not a plain identifier. The cost is one statement per cold snapshot refresh for a model that lives on key pages, and nothing on a warm read.
 
 ### Capacity and reservation
 
