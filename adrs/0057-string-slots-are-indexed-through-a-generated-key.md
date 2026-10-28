@@ -67,9 +67,8 @@ This applies to the join strategy only, the one used when a filter has no `or` a
 | `gt`, `gte` | `k >= RPAD(LEFT(w,H),H,UNHEX('00'))` |
 | `lt`, `lte` | `k <= CONCAT(RPAD(LEFT(w,H),H,UNHEX('00')), REPEAT(UNHEX('FF'),16))` |
 | `between` | both bounds above |
-| `is_null`, `is_not_null` | `k IS NULL`, `k IS NOT NULL`, because `i_str_01` is in no index on a key page |
 
-`neq` and `nin` take no key predicate, since they cannot use an index today either.
+`neq` and `nin` take no key predicate, since they cannot use an index today either. `is_null` and `is_not_null` take none either. A first draft asked the key column as well, and the checks under "Checks on the implementation" showed that it changed no plan on most engines and made `is_not_null` slower on MySQL 8.0.13.
 
 Three things must hold or the lookup returns wrong rows without an error. The search value is cast to the page's collation before its weight string is taken, because a bound value arrives in the connection's collation and its weight string under that collation matches nothing stored (in a probe run of 2026-10-06 on MySQL 8.0.46, 58 of 62 lookups returned the wrong rows without the cast and none with it). The collation name comes from the page, never from a constant, and is checked against `[A-Za-z0-9_]+` before it reaches SQL. And the value is bound once for each place the key text uses it, with positional placeholders, because a named placeholder used twice fails under native prepares (SQLSTATE HY093).
 
@@ -109,7 +108,7 @@ It does not promise a sort. After the head, keys are ordered by digest, so key o
 **Negative:**
 
 - A text prefix or range bound that reaches past the head, on a column where every value shares that head, can no longer narrow the index, and this was accepted together with the choice of key. A lower bound 1% from the top of such a column read 198,100 rows in 1.6 to 2.2 s on MySQL 8.0.46 (200,000 rows, URL-like values of 20 to 148 characters whose first 12 to 140 characters are the same in every row), against 2,001 to 2,003 rows in 8 to 19 ms on today's page (runs of 2026-10-18 and 2026-10-19). A prefix that stayed inside the head ran within 1.06 to 1.30 times today's time on the same data.
-- Writes cost more. These are the ratios of the key page's time to today's page's time for 1,000 rows with 255-character values in all 25 slots, the median of 7 paired repetitions on 10,000 preloaded rows (run of 2026-10-19). Each repetition varied widely (for MySQL 8.0.46, the insert ran from 0.44 to 9.03 times), so only the order of magnitude holds, and the engine's own write path has not been measured.
+- Writes cost more. These are the ratios of the key page's time to today's page's time for 1,000 rows with 255-character values in all 25 slots, the median of 7 paired repetitions on 10,000 preloaded rows (run of 2026-10-19). Each repetition varied widely (for MySQL 8.0.46, the insert ran from 0.44 to 9.03 times), so only the order of magnitude holds. These are SQL level figures. A paired run of the engine's own write path was not made, and "Checks on the implementation" has the one unpaired load that was timed.
 
   | Operation | MySQL 8.0.13 | MySQL 8.0.46 | MariaDB 10.11 | MariaDB 11.8 |
   | :-- | :-- | :-- | :-- | :-- |
@@ -132,6 +131,36 @@ It does not promise a sort. After the head, keys are ordered by digest, so key o
 - A longer head. It would shrink the prefix and range limit above and cost the row size the null-out runs show. The compiler reads the head from each page, so a later release can change it without breaking old pages, and a `Config` parameter can be appended then. No setting ships now.
 - A registry flag for the page shape. Rejected under "How the engine knows a page's shape".
 - Altering existing pages. [`0012`](0012-immutable-extension-page-ddl.md) forbids it on populated pages.
+
+## Checks on the implementation
+
+These runs of 2026-10-28 used the implementation as built, through the engine's own read path. The data was four string fields on one model, 100,000 rows for each of two tenants, read 50 rows to a page. `label` has a value held by 5% of the rows and another held by 50%. `tier` is two lowercase letters and a number. `url` is a 44 character start shared by every row, then eight digits. `note` is filled on 5% of the rows. Rows touched come from the server's `Handler_read_*` counters. Times are the median of 7 runs of the same statement on a warm server, so they show the size of a difference and not a precise ratio. The engines were MySQL 8.0.13, MySQL 8.0.46, MariaDB 10.11.19 and MariaDB 11.8.9 for the key page, and MySQL 8.0.13 and 8.0.46 for today's prefix page.
+
+On the key page a text equality at 5% and at 50% touched 102 rows and sorted none, in ascending and descending order and on the first and the tenth page, on all four engines. A `label` equality together with a prefix on `tier` touched 515 and 551 rows with none sorted, against 6,003 rows and 51 sorted on the prefix page of MySQL 8.0.13, and 5,460 and 51 on MySQL 8.0.46.
+
+| Read, first page | Key page, MySQL 8.0.13 | Prefix page, MySQL 8.0.13 | Key page, MySQL 8.0.46 | Prefix page, MySQL 8.0.46 |
+| :-- | :-- | :-- | :-- | :-- |
+| `label` equal, 5% | 102 touched, none sorted, 1.7 ms | 14,957 touched, 51 sorted, 284 ms | 102 touched, none sorted, 2.7 ms | 9,937 touched, 51 sorted, 27 ms |
+| `label` equal, 50% | 102 touched, none sorted, 1.1 ms | 200,107 touched, 51 sorted, 1,935 ms | 102 touched, none sorted, 2.3 ms | 150,028 touched, 51 sorted, 332 ms |
+
+For bounds that stay inside the head, on MySQL 8.0.46 the key page and the prefix page touched the same rows for the bounds that stay inside the head (1,995 for the prefix `ab`, 2,079 for `lt ab`, 3,853 for `between ba and bc`, about 110,000 for the 10% bounds). On MySQL 8.0.13 the key page touched about 1.6 times as many rows (5,038, 5,248 and 9,683 against 3,044, 3,170 and 5,831), with times of 523, 574 and 455 ms against 447, 291 and 626 ms. The cause was not established, and MySQL 8.0.13 is the supported floor. On MariaDB the optimiser read the primary key in `entry_id` order for most of these bounds and sorted nothing.
+
+Bounds past the head show the accepted limit again. A prefix of the shared `url` start plus four digits touched 105,001 rows on MySQL 8.0.46 in 475 ms on the key page, against 10,001 rows in 27 ms on the prefix page, and 110,053 rows in 725 ms against 15,053 rows in 21 ms on MySQL 8.0.13. The late lower bound on `url` touched the same rows on both shapes on 8.0.13 (110,053), and 105,001 against 10,001 on 8.0.46. On MariaDB the key page touched 5,102 rows for the prefix and 95,102 for the late bound, with no prefix page run to compare. The counts differ from those in the Consequences, which came from a different dataset, and the direction is the same.
+
+The null tests take no key predicate. `is_null` at 95% never used the key index on any engine, because the optimiser preferred the tenant index. `is_not_null` at 5% used it only on MySQL. On MySQL 8.0.46 the plan matched the prefix page (10,025 touched, 51 sorted, about 22 ms either way). On MySQL 8.0.13 the key predicate made it worse, with 25,113 rows touched, a sort and 497 ms, against 1,618 rows, no sort and 8.5 ms on the prefix page. MariaDB read the primary key in order. The key predicate for both tests was therefore removed.
+
+| Other check | MySQL 8.0.13 | MariaDB 10.11.19 |
+| :-- | :-- | :-- |
+| Cold snapshot refresh, median of 300 loads | 5.92 ms on a key page, 4.18 ms on a prefix page | 137.26 ms on a key page, 92.62 ms on a prefix page |
+| Liberator sweep of one slot with 25 string slots filled, 5,000 rows, chunks of 500, median of 3 rounds, 30 character values | 2,296 ms on a key page, 839 ms on a prefix page | 2,100 ms on a key page, 1,784 ms on a prefix page |
+| The same sweep with 255 character values | 4,157 ms on a key page, 7,007 ms on a prefix page | 2,671 ms on a key page, 2,834 ms on a prefix page |
+| Promotion backfill of a string field, 30,000 rows, 61 ticks, median of 3 rounds | 5,961 ms on a key page, 2,716 ms on a prefix page | 27,432 ms on a key page, 28,182 ms on a prefix page |
+
+The MySQL 8.0.13 timings varied a lot between rounds. The sweep on the prefix page with 255 character values took 13,770, 3,551 and 7,007 ms, and the backfill on the key page took 8,965, 5,961 and 3,178 ms, so the medians are weak evidence for the direction. The refresh is one more dictionary read, and it happens once for each schema change in a process.
+
+For the probe's data a page table was 26.6 MB of data and 39.8 MB of index on the key page, against 10.5 MB and 22.6 MB on the prefix page, the same on both MySQL versions. The load of both tenants through the engine's own write path took 254 s on the key page and 133 s on the prefix page on MySQL 8.0.13, and 204 s and 191 s on 8.0.46. Each is one unpaired run, so this shows the order of magnitude only. A paired and interleaved run of the engine's write path was not made, so the write costs in the Consequences stay SQL level figures.
+
+On correctness, the same read path returned for each of 784 probes over values chosen to confuse a lookup the same entries as the slot column compared alone, on four connection settings. Breaking one part of the layout at a time showed what each part carries. Without the cast to the page collation 546 and 548 probes were wrong, on the two settings whose collation differs from the page's. Without the zero padding of lower bounds 123 were wrong, without the 0xFF fill of upper bounds 105, and with a prefix upper bound built from the padded head 215. MariaDB 11.8 passed the 682 tests selected by name for retype, ticks, the daemons, compaction, slots, writes, reads, search and pages, with one MySQL only test skipped.
 
 ## Related
 
