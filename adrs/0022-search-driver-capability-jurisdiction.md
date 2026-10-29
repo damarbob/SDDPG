@@ -44,6 +44,8 @@ The `MysqlNativeDriver` implements `supportsFilterOn($fieldId)` by returning the
 
 This pre-flight is uniform across drivers. The MySQL driver effectively re-implements ADR `0004`'s `is_filterable = false → 400` behavior by returning `false` from `supportsFilterOn` for non-filterable fields. External drivers may return `true` for the same field if their index covers it.
 
+> **Clarified 2026-10-29:** the MySQL driver also returns `false` for a field the registry declares filterable but whose slot is not usable yet (no slot reserved, `backfilling` or `tombstoned`). The pre-flight reports that case the same way as a non-filterable field, with the wire code `field_not_filterable` and the `FieldNotFilterableException` class, so a caller that maps that class to its `400` response keeps working while a field waits for its index. Only the exception message tells the two causes apart. The `FieldNotIndexedException` class that ADR `0004` anticipated is therefore never thrown by the built-in engine, and a change to throw it would be a change to this rule and to the wire format.
+
 ### What `is_filterable` Still Does
 
 For all drivers:
