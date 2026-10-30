@@ -103,7 +103,7 @@ It does not promise a sort. After the head, keys are ordered by digest, so key o
 - A text equality that starts a read is bounded by about a page on every engine. At 5% of a tenant it went from 10,009 rows touched on MySQL 8.0.46 and 15,065 on 8.0.13 to 102, with none sorted, and the median time was 0.03 of today's on both MySQL versions and about 0.5 on MariaDB (runs of 2026-10-18).
 - A row with many long values can be updated and deleted. In every undo scenario above the key page succeeded for all 25 slots, on both MySQL versions measured and on MariaDB 10.11 (runs of 2026-10-19).
 - A text equality is exact for values of any length, and the value missed by the prefix index is found.
-- An 8 KB InnoDB page size builds a page again. Today's page fails there with errno 1071 and the key page builds on all four engines. A 4 KB page size still builds neither shape (errno 1071 for today's page and 1118 for the key page), so the refusal in `bootstrap()` stays a separate item.
+- An 8 KB InnoDB page size builds a page again. Today's page fails there with errno 1071 and the key page builds on all four engines. A 4 KB page size builds a key page with 12 text slots but not one with 25, which fails with errno 1118, "Row size too large (> 1982)", on every Watcher poll (checked 2026-10-30 on MySQL 8.0.13), and today's page still fails there with errno 1071. `bootstrap()` therefore refuses a page size below 8 KB, before it creates any table.
 
 **Negative:**
 
