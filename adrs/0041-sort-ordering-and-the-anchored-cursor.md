@@ -53,7 +53,7 @@ Written as `SELECT (SELECT …)` rather than `SELECT … FROM …` deliberately:
 
 Embedding the value instead was considered and rejected on size: a string slot holds 4096 characters, so a self-contained token would reach roughly 22 KB, past every practical URL and header limit. The anchored form keeps a token constant-size and keeps `0006`'s "cursor derived from the `id` of the last record seen" **literally true**.
 
-Wire format: unsorted reads keep emitting `base64url("v1:" . entryId)` byte-for-byte. A sorted read emits `base64url("v2:" . json)` carrying the anchor id, the sort key identity, and the direction. Both decode. A v1 token is accepted by an explicitly-default sort, because `null` and `byId(Asc)` name the same ordering.
+Wire format: unsorted reads keep emitting `base64url("v1:" . entryId)` byte-for-byte. A sorted read emits `base64url("v2:" . json)` carrying the anchor id, the sort key identity, and the direction. Both decode. A v1 token is accepted by an explicitly-default sort, because `null` and `byId(Asc)` name the same ordering. A field sort that overrides where NULL goes also records that in the token (see "Null placement" below).
 
 Stamping the ordering is what finally makes `0006`'s "a cursor is invalidated if the caller changes sort order" **enforceable** — it is now a typed `InvalidCursorException` rather than a documented hazard.
 
@@ -72,6 +72,34 @@ Descending mirrors it: the first branch becomes `av IS NOT NULL AND k IS NULL`, 
 **All three branches are load-bearing.** A slot column is nullable — a row whose value has not been mirrored into its slot (an [`0007`](0007-write-availability-over-query-completeness.md) exhaustion fallback still awaiting the Reconciler) reads NULL — and `k > NULL` is UNKNOWN, so a two-branch predicate silently loses every NULL row. Verified by deleting the first branch and confirming an ascending walk stops at the end of the NULL block and never reaches the valued rows.
 
 That a NULL slot means "not mirrored yet" rather than "no value" is **the same visibility gap filters already have** under `0007`: such a row does not match a filter on that field either. It is stated here as existing behaviour, not introduced by this ADR.
+
+### Null placement
+
+Added 2026-10-31. A field sort used to leave the placement of NULL to MySQL, which puts it first ascending and last descending. A caller sorting a sparse field, a `score` that most entries lack for example, could not ask for the highest scores first with the empty entries after them unless it filtered the empty ones out of the result.
+
+`SortSpec::byField()` gains a trailing optional `NullPlacement` argument, `First` or `Last`. Leaving it out, or passing the placement MySQL already uses for that direction, keeps today's behaviour, so no existing caller, no existing SQL and no cursor in flight changes. `byId()` and `byCreatedAt()` do not take it, because `entry_data.id` and `created_at` are `NOT NULL`.
+
+The keyset predicate above already has the right three branches. Only the first depends on where NULL sits, and the direction decides the comparison operator alone. With `<op>` standing for `>` ascending and `<` descending:
+
+```sql
+-- NULLs first
+(   (av IS NULL     AND k IS NOT NULL)
+ OR (av IS NOT NULL AND k <op> av)
+ OR (k <=> av AND entry_data.id <op> ?) )
+
+-- NULLs last
+(   (av IS NOT NULL AND k IS NULL)
+ OR (av IS NOT NULL AND k <op> av)
+ OR (k <=> av AND entry_data.id <op> ?) )
+```
+
+With NULLs last, a NULL anchor satisfies only the third branch, so the walk stays inside the NULL block in id order. A valued anchor still has the whole NULL block ahead of it, which is what the first branch says. The NULL block is ordered by id in the sort's own direction, as before.
+
+The `ORDER BY` is unchanged when the placement is the one MySQL uses for the direction. Otherwise `k IS NULL` goes ahead of the key, `ASC` for NULLs last and `DESC` for NULLs first, for example `ORDER BY k IS NULL ASC, k ASC, entry_data.id ASC`.
+
+Placement is part of the ordering, so the v2 token carries it as an optional `n` member (`first` or `last`), written only when the placement differs from MySQL's for that direction. A default sort therefore emits the same token as before, and a token without `n` means the native placement. A cursor issued under one placement is refused under the other with the existing `cursor_sort_mismatch` reason, and an explicit placement equal to the native one matches a token without `n`.
+
+A field sort already filesorts the whole filtered set, so the extra key should add no new cost class. Probed on MySQL 8.0.13 with 20,000 entries, about 30% of them empty (half of those with no page row at all), on an integer slot and on a text slot whose values share a 1,100 byte prefix, all four shapes plan as `Using temporary; Using filesort`, read 20,001 rows and sort 51. MariaDB was not probed, so there the shape tests pin the order and the plan class stays unmeasured.
 
 ### The `0030` correction
 
@@ -127,12 +155,14 @@ The 5% row is the one that mattered: a filter that matched a few percent of a te
 - "Newest first" — the dominant consumer ask — costs a backward index scan and nothing else. So does `created_at`.
 - Unsorted callers are untouched: same SQL shape, same cursors, byte-identical tokens.
 - Cursor size is constant regardless of the sorted field's width.
+- A caller can sort a sparse field with its empty entries after the valued ones, or before them, without filtering any entry out.
 - `0030`'s open caveat is closed with a measurement rather than carried forward.
 
 **Negative:**
 
 - A field sort is not bounded-discovery. It filesorts over the filtered set on every page, so deep pagination under a field sort costs materially more than under an intrinsic sort. Operators should expect `Using temporary; Using filesort` in the slow log for these and should not treat it as a regression.
 - `EntrySearchInterface` grew a method, which breaks any third-party driver. This is deliberately taken **now**, while v0.3.0 is untagged and no such driver can exist outside this repository; after the tag it would be a breaking change.
+- A third-party driver that ignores `SortSpec::$nulls` orders natively, silently, for a caller who asked for the other placement. `EntrySearchInterface` gained no method for this, since adding one after the tag would break every existing driver, so the contract is written down and not enforced.
 - Sorting reads the slot column, so a row awaiting an `0007` backfill sorts as NULL. Consistent with filters, but a caller sorting a freshly-bulk-loaded model may see rows clustered in the NULL block until the Reconciler drains.
 - A cursor's anchor row can be removed, or its slot nullified, mid-pagination. The anchor then reads NULL and the walk resumes from the NULL block rather than erroring. Bounded and rare, but not invisible.
 - One more `ORDER BY` shape to keep the probe and the bounded fetch agreeing on. The fetch no longer sorts at all; it reorders in PHP against the probe's id sequence, which is exact for every mode and removes a redundant database sort — but it is now the single place that must not drift.
