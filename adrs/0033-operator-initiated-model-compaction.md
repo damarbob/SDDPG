@@ -14,7 +14,7 @@ The policy edges were already litigated in ADR `0031`:
 
 The middle is a **deliberate, operator-initiated, per-model operation**: when the metric flags a specific hot, fragmented model, the operator pays the relocation cost exactly once, exactly there.
 
-The decisive implementation fact — verified against the shipped Phase 6b pipeline — is that compaction is almost entirely already built. The ADR `0024` coercion matrix short-circuits its **identity diagonal** (`source type === target type` → the value passes through, normalised), so a *same-type retype* is mechanically nothing but a slot relocation with a data copy. The retype initiation transaction does not reject same-type initiations, the checkpoint contract (`backfill_checkpoints` rows named `retype_field_{id}` with `source_declared_type`) is exactly reusable, and the Reconciler's `RetypeBackfillWorkSource` will drain such a checkpoint **unmodified** — chunked identity backfill, `backfilling → ready` promotion, schema-version bump, the ADR `0019` post-backfill cardinality sample, and ADR `0031`'s `trigger='post_relocation'` spread sample all fire per existing spec. What is genuinely missing is only: a planner that chooses target pages, a reservation variant that can *pin* the chosen page, and an orchestration surface.
+The decisive implementation fact — verified against the shipped Phase 6b pipeline — is that compaction is almost entirely already built. The ADR `0024` coercion matrix runs its **identity diagonal** (`source type === target type` → the value is checked against the type and passes through, normalised), so a *same-type retype* is mechanically a slot relocation with a data copy. A value written through the engine always passes, and one that does not fit becomes `NULL` with a `coercion_null` event. The retype initiation transaction does not reject same-type initiations, the checkpoint contract (`backfill_checkpoints` rows named `retype_field_{id}` with `source_declared_type`) is exactly reusable, and the Reconciler's `RetypeBackfillWorkSource` will drain such a checkpoint **unmodified** — chunked identity backfill, `backfilling → ready` promotion, schema-version bump, the ADR `0019` post-backfill cardinality sample, and ADR `0031`'s `trigger='post_relocation'` spread sample all fire per existing spec. What is genuinely missing is only: a planner that chooses target pages, a reservation variant that can *pin* the chosen page, and an orchestration surface.
 
 Two behaviours of the existing lifecycle shape the design and must be stated up front:
 
@@ -109,7 +109,7 @@ Two new structured-log events on `source: registry` (the ADR `0020` allowlist ga
 - ADR `0031` — Slot Spread Metric (the trigger and the built-in verification; this ADR is the "cure" it deferred)
 - ADR `0032` — Model-Affine Slot Reservation (the prevention counterpart; affinity keeps compaction rare)
 - ADR `0016` — Field Type Change Lifecycle (the reused lifecycle; the single divergence is pin-or-fail vs deferred reservation)
-- ADR `0024` — Type Coercion Matrix (the identity diagonal that makes same-type retype a pure relocation)
+- ADR `0024` — Type Coercion Matrix (the identity diagonal that makes same-type retype a relocation with a data copy)
 - ADR `0009` — Tombstone-Based Slot Eviction (sweep of the vacated slots; the source of double-occupancy)
 - ADR `0012` — Immutable Extension Page DDL (why relocation, not `ALTER`, is the only move)
 - ADR `0013` — JSON Payload as System of Record (reads stay correct throughout the window)
