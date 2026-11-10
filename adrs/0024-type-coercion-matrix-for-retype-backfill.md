@@ -1,6 +1,6 @@
 # 0024 - Type Coercion Matrix for Retype Backfill
 
-**Status:** Proposed
+**Status:** Accepted
 **Created:** 2026-05-06
 
 ## Context
