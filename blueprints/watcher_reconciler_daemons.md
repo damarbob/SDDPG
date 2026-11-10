@@ -134,7 +134,6 @@ Emitted when the Reconciler attempts to coerce a JSON payload value into a typed
 | `event`              | `"coercion_null"`                                    | Fixed.                                                                                                                                   |
 | `tenant_id`          | integer                                              | Tenant of the affected entry. Required (this event is always tenant-scoped).                                                             |
 | `correlation_id`     | string (UUID)                                        | Per-chunk correlation ID. Lets operators trace this event to the chunk's `chunk_complete` event.                                         |
-| `chunk_id`           | integer                                              | Reconciler chunk identifier; also carried on `chunk_claimed` / `chunk_complete` for joinability.                                         |
 | `field_id`           | integer                                              | The retyping field's `stardust_fields.id`.                                                                                               |
 | `slot_assignment_id` | integer                                              | The new slot (in `backfilling` status per ADR 0017) receiving the `NULL`. Aggregate per-retype-operation here.                           |
 | `entry_id`           | integer                                              | The affected `entry_data.id`. Lets operators inspect the original JSON payload for triage.                                               |
@@ -148,7 +147,7 @@ Emitted when the Reconciler attempts to coerce a JSON payload value into a typed
 - `non_integer` — `numeric → int` source was not integer-valued (e.g., `42.5`).
 - `malformed_datetime` — `string → datetime` value did not satisfy strict RFC 3339 with explicit offset.
 - `malformed_number` — `string → int` or `string → numeric` value did not satisfy the target type's grammar (e.g., `"42abc"`, `"42.0"` for `string → int`).
-- `epoch_coercion_rejected` — fell into one of the four cells the matrix rejects categorically (`int ↔ datetime`, `numeric ↔ datetime`).
+- `epoch_coercion_rejected` — fell into one of the four cells the matrix rejects categorically (`int ↔ datetime`, `numeric ↔ datetime`). A retype of those pairs is refused when requested, so this reason appears only when a checkpoint for such a pair already exists.
 - `unparseable` — JSON value's structural type (object, array, boolean) was incompatible with the source `declared_type`. Should be rare; surfaces out-of-band JSON edits or chained-retype anomalies.
 
 Operators MUST monitor `coercion_null` event volume per active backfill (correlated by `slot_assignment_id`). A non-zero rate over a meaningful sample of the tenant/model partition is the only signal that retype-incompatible data is being silently NULL'd in the new slot column.
