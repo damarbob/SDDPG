@@ -25,12 +25,12 @@ Three commitments govern Reconciler retype backfill coercion. The 4×4 type-pair
 
 ### The Coercion Matrix
 
-The diagonal is identity (`string → string`, `int → int`, etc.) and is omitted as a no-op. The twelve off-diagonal cells:
+The diagonal is identity (`string → string`, `int → int`, etc.) and is omitted from the table because it changes no type. It still runs when a field is promoted to filterable without a type change. Each value is checked and normalized for the slot, so a JSON value that does not fit becomes `NULL` with a `coercion_null` event. The twelve off-diagonal cells:
 
 | from \ to | `string` | `int` | `numeric` | `datetime` |
 |:---|:---|:---|:---|:---|
 | `string` | — | base-10 integer literal: optional leading `-`, digits `[0-9]+`, no whitespace, no decimals, no thousands separators, no leading `+`; result MUST be in signed 64-bit range; else `NULL` | JSON-number grammar (RFC 8259 §6): optional leading `-`, integer or fractional, optional exponent `[eE][+-]?[0-9]+`; no whitespace; no `NaN`/`Infinity`; else `NULL` | strict RFC 3339 with explicit UTC offset (`Z` or `±HH:MM`); naive datetimes and impossible dates such as `2026-02-31` → `NULL`. The slot column is `DATETIME` at whole-second precision, so fractional seconds are dropped from the slot (the JSON payload keeps the original string). The result is normalized to UTC (matching QueryFilter §4.5 §20) |
-| `int` | decimal stringification, no leading zeros, leading `-` for negatives | — | identity (lossless widening; `int` ⊂ `numeric` representable range) | **refused (Commitment 2)** |
+| `int` | decimal stringification, no leading zeros, leading `-` for negatives | — | converted to a double, because the numeric slot is `DOUBLE`. Exact up to 2^53 (9007199254740992), and larger integers lose their low digits in the slot while the JSON payload keeps the exact value | **refused (Commitment 2)** |
 | `numeric` | canonical decimal stringification: shortest representation that round-trips, no scientific notation, trailing zeros after the decimal trimmed, `-0` normalized to `0`, no trailing decimal point (e.g., `42.0` → `"42"`, `-0.0` → `"0"`, `1.5e2` → `"150"`) | only if integer-valued (`floor(v) == v`) AND in signed 64-bit range; otherwise `NULL` (no truncation, no rounding) | — | **refused (Commitment 2)** |
 | `datetime` | RFC 3339 normalized to UTC, with `Z` suffix (not `+00:00`); microsecond precision preserved; trailing zeros in fractional seconds NOT trimmed (full `.000000` is canonical) | **refused (Commitment 2)** | **refused (Commitment 2)** | — |
 
@@ -64,6 +64,7 @@ Operators MUST monitor `coercion_null` event volume per active backfill (correla
 - `string → numeric` admits scientific notation (per the JSON-number grammar inherited from §4.5 §19). Audits expecting a "plain decimals only" rule will need to read the matrix carefully; the ADR explicitly allows `"4.2e1"`.
 - The `numeric → string` canonical stringification rule requires implementation discipline. A naive `(string)$double` cast in PHP will produce locale-dependent output and may emit scientific notation for large or small values. The matrix's canonical form must be implemented explicitly, not delegated to the platform default.
 - A fractional second in a `string → datetime` source is dropped from the slot, so a filter compares against whole seconds. The JSON payload keeps the full value.
+- An `int → numeric` retype rounds integers above 2^53 in the slot. The JSON payload keeps the exact value.
 - Callers needing epoch-based int↔datetime migration must bridge through `string` (e.g., retype `int → string`, then `string → datetime` after normalizing the JSON payload to RFC 3339). This is a two-retype operation rather than one. The complexity is the price of refusing to bake epoch policy into the engine.
 
 **Rejected alternatives:**
