@@ -1,6 +1,6 @@
 # 0056 - Filtered Default-Order Reads Drive From a Full-Width Equality Leaf
 
-**Status:** Proposed
+**Status:** Accepted
 **Created:** 2026-10-26
 
 ## Context
