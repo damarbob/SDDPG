@@ -46,7 +46,7 @@ Two rules follow from that window and are binding on the implementation:
 - A field rename costs one pass over every entry in the model, forever. It is an operator-initiated, infrequent operation, but it is O(entries) and will never be O(1).
 - A rename opens a window during which the payload is heterogeneous — some rows on the old key, some on the new — which the read path, the write path, the CSV export path and the point read must each bridge explicitly. Each of those is a place a future contributor can reintroduce a silent null.
 - `stardust_fields` carries a `previous_name` column whose only purpose is that window, and it introduces a name-collision case the existing `UNIQUE (model_id, name)` index does not cover: renaming a second field into a first field's vacated name would make the first field's fallback read the second field's values. Initiation must guard against `name` **and** `previous_name`.
-- The point read gains a schema-version probe it did not previously need, so that it cannot disagree with the paginated read during a rename window.
+- The point read gains a schema-version probe it did not previously need, so that it cannot disagree with the paginated read during a rename window. The probe rides in the entry's own statement, so it adds no statement of its own.
 
 **Rejected alternatives:**
 
