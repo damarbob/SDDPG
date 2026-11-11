@@ -145,7 +145,7 @@ Emitted when the Reconciler attempts to coerce a JSON payload value into a typed
 
 - `out_of_range` — value parsed but exceeded the target type's representable range (e.g., `string → int` value `"99999999999999999999"`; signed-64-bit overflow).
 - `non_integer` — `numeric → int` source was not integer-valued (e.g., `42.5`).
-- `malformed_datetime` — `string → datetime` value did not satisfy strict RFC 3339 with explicit offset.
+- `malformed_datetime` — `string → datetime` value did not satisfy strict RFC 3339 with explicit offset, carried more than six fractional digits, or named a date that does not exist.
 - `malformed_number` — `string → int` or `string → numeric` value did not satisfy the target type's grammar (e.g., `"42abc"`, `"42.0"` for `string → int`).
 - `epoch_coercion_rejected` — fell into one of the four cells the matrix rejects categorically (`int ↔ datetime`, `numeric ↔ datetime`). A retype of those pairs is refused when requested, so this reason appears only when a checkpoint for such a pair already exists.
 - `unparseable` — JSON value's structural type (object, array, boolean) was incompatible with the source `declared_type`. Should be rare; surfaces out-of-band JSON edits or chained-retype anomalies.
