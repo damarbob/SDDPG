@@ -1,6 +1,6 @@
 # 0057 - String Slots Are Indexed Through a Generated Key
 
-**Status:** Proposed
+**Status:** Accepted
 **Created:** 2026-10-28
 
 ## Context
@@ -171,5 +171,5 @@ On correctness, the same read path returned for each of 784 probes over values c
 ## Related
 
 - [`0030`](0030-string-slot-storage-type-and-index-prefix.md) chose `TEXT` and the 766-character prefix index. The column type stays and the index changes for pages built after this record.
-- [`0056`](0056-filtered-default-order-reads-drive-from-a-full-width-equality-leaf.md) left text equality open. This record answers it and extends the driving rule. Both it and [`0043`](0043-pages-provision-only-indexed-columns.md) are still `Proposed`.
+- [`0056`](0056-filtered-default-order-reads-drive-from-a-full-width-equality-leaf.md) left text equality open. This record answers it and extends the driving rule. It is `Accepted`, and [`0043`](0043-pages-provision-only-indexed-columns.md) is still `Proposed`.
 - [`0012`](0012-immutable-extension-page-ddl.md) makes the change forward-only. [`0041`](0041-sort-ordering-and-the-anchored-cursor.md) keeps field sorts on the slot. [`0033`](0033-operator-initiated-model-compaction.md) is why existing fields do not move. [`0054`](0054-mariadb-10-11-support-floor.md) and [`0055`](0055-target-engine-is-detected-not-declared.md) give the two collations and the engine detection the page collation relies on.
