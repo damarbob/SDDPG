@@ -30,6 +30,8 @@ During the backfill window, the affected field is still retrievable via `JSON_EX
 >
 > **No reservation happens before a write (2026-10-29).** The Reconciler reserves for a field only after a write has queued an entry that needs it, so a field registered as filterable has no slot, and a filter on it is rejected, until its first write has been drained. That includes a model with no entries yet. Registration does not reserve eagerly, because a reservation holds an indexed slot for a field that may never be written and because a daemon step for it would reverse the rule above. A consumer that must filter earlier reserves the slot itself, as the manual route in the README does, and a filter control should follow `isIndexed` rather than `isFilterable`.
 >
+> **Narrowing proposed 2026-11-12 by ADR [`0058`](0058-a-filterable-field-on-an-empty-model-is-born-with-its-slot.md):** registration would reserve a slot at once when the model has no entries. This clarification stands until that ADR is accepted, and it keeps applying to a model that has entries.
+>
 > Sub-phase 2's duration is bounded by backfill-queue depth, which the Consequences below already name as the leading indicator to monitor. Suppressing sub-phase 2 entirely — holding filterability until the whole queue drains, as ADR `0016` does for retypes — is deliberately **not** the rule here: a retype is operator-initiated and can afford to wait, whereas exhaustion is a degradation the system is racing to exit, and ADR `0016`'s scope is a type change or an `is_filterable: false → true` promotion, neither of which this is.
 
 ## Consequences
