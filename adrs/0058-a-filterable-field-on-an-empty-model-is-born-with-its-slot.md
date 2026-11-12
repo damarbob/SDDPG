@@ -64,6 +64,7 @@ The probe reads a consistent snapshot. A write that commits after that snapshot 
 - A slot is taken at definition for a field that may never be written. The cost is bounded by the field count and is capacity the Watcher was already provisioning for the same field as demand.
 - Registration locks one free slot row per filterable field (ADR `0032` measured one row per reservation) and holds the schema version row for the length of the transaction, as it did already. A lock timeout or deadlock in the reservation rolls back the whole registration, and the caller retries it like any other registry statement.
 - Behaviour a consumer can see changes. A filter on a just-registered field of an empty model was rejected and is now accepted. The README and `docs/configuration.md` say the opposite today and change with the code, along with the smoke tests that pin the lazy behaviour. Setting `reserveSlotAtRegistration` to `false` restores the old behaviour.
+- A setup script that registers a field and then reserves its slot by hand now fails with a duplicate key error when an indexed free slot already existed at registration. Measured with the Docker seed script on a database that already had a page. Such a script reserves only for a field whose `isIndexed` is false, or runs with the setting off.
 - A filterable field added to a populated model still has no slot until its first write, so consumers keep gating on `isIndexed` for that case.
 - The race above stays.
 
