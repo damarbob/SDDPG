@@ -3,6 +3,8 @@
 > **This document is the single source of truth for the physical schema of the StarDust core ingestion engine.**
 > It is kept in sync with the core architecture blueprint.
 
+> **Table names.** This document writes every table and constraint with its bare name. When `Config::$tablePrefix` is set (ADR [`0059`](../adrs/0059-table-names-take-an-optional-installation-prefix.md)), each name carries the prefix, as in `sd_entry_data` and `sd_fk_fields_model`.
+
 The schema comprises three concern groups:
 
 1. **Data plane** (§1–§3) — `entry_data`, `entry_slots_page_X`, `stardust_sync_queue`. Stores entry payloads and the indexed projections.

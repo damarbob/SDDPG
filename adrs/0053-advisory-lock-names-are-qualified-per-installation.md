@@ -30,6 +30,8 @@ So two StarDust installations on one shared host excluded each other's Watcher a
 
 2. **The default discriminator is `DATABASE()`.** StarDust has no table-name prefix — `entry_data` and the `stardust_*` registry tables are fixed names — so one schema holds at most one installation, which makes the schema name a sound identity for it. This is what makes the fix work with no configuration: an operator who has never heard of this ADR is covered.
 
+   > **Narrowing proposed 2026-11-14 by ADR [`0059`](0059-table-names-take-an-optional-installation-prefix.md):** with a table prefix set, two installations can share one database, so the discriminator would be `DATABASE()` and the prefix together. This item stands until that ADR is accepted, and it keeps applying to an installation with no prefix.
+
 3. **`Config::$lockNamespace` (nullable string, appended last) overrides it.** Two cases the default cannot serve: an installation that must keep one lock identity across a database rename, and two installations that must deliberately share one. It is a discriminator, not a switch — there is no value that restores unqualified names, because a per-installation lock is the correct behaviour and a mode that turns it off is a mode to support forever.
 
 4. **The base name and the timeout both stay normative.** Blueprint AC#2's `stardust_page_provision` survives as a *prefix* of what reaches the server, and its `10` is untouched. This ADR changes who a lock excludes, not what it means or how long a caller waits for it. Keeping the base greppable is deliberate: an operator reading `performance_schema.metadata_locks` can still tell what a held lock is for.

@@ -22,8 +22,55 @@ Write an ADR when a proposed change or decision:
 | **File format**  | Markdown (`.md`)                                                                                                                                                                                                            |
 | **File naming**  | `NNNN-short-title.md` (e.g., `0001-extension-tables-over-eav.md`)                                                                                                                                                           |
 | **Template**     | [`_template.md`](_template.md) — copy this to start a new ADR                                                                                                                                                               |
-| **Immutability** | ADRs are **append-only**. Do not edit the core decision or context of a published ADR. If a decision is changed later, create a new ADR that supersedes the original, and update the status of the old one to `Superseded`. |
+| **Immutability** | ADRs are **append-only**. Do not edit the core decision or context of a published ADR. A later ADR leaves a dated note on the older one, as set out in [Notes on an earlier ADR](#notes-on-an-earlier-adr), and only a wholesale replacement changes the older ADR's status, to `Superseded`. |
 | **Status**       | `Proposed` → `Accepted`, `Rejected`, `Deprecated`, `Superseded`                                                                                                                                                             |
+
+## Notes on an earlier ADR
+
+A later ADR that extends, narrows, amends or corrects an earlier one leaves a dated note on the earlier one, so that a reader of the old ADR finds the change. The old text is not rewritten. While the earlier ADR is `Proposed` it may be edited in place instead, and an `Accepted` one takes only editorial fixes in place (a typo, a broken link, a sentence reworded without changing any claim). A note is also the right record on a `Proposed` ADR when the later ADR is itself `Proposed`, because the later one may be rejected.
+
+### Choosing the label
+
+Ask what happens to the older claim.
+
+| The older claim is | Label | Example |
+| :-- | :-- | :-- |
+| Still true, with nothing changed | Note | ADR 0023, noting ADR 0054 |
+| Still true, with more built on top | Extended | ADR 0006, by ADR 0041 |
+| True only in a smaller scope | Narrowed | ADR 0005, by ADR 0056 |
+| Left open or ambiguous, and now pinned down | Clarified | ADR 0009, by ADR 0046 |
+| Wrong | Corrected | ADR 0030, by ADR 0041 |
+| No longer true as written, because behaviour changed | Amended | ADR 0009, by ADR 0049 |
+| Replaced for good | Superseded | ADR 0031, by ADR 0044 |
+
+One note records one change. A later ADR that both extends and narrows an earlier one leaves two notes.
+
+### Writing the note
+
+A note is a blockquote placed directly under the sentence, list item or bullet it concerns. It opens with the bold label, the date and the later ADR, and then says in one or two sentences what holds now. The later ADR owns the reasoning, so the note does not repeat it.
+
+```text
+> **Narrowing proposed 2026-11-14 by ADR [`0059`](0059-table-names-take-an-optional-installation-prefix.md):** with a table prefix set, two installations can share one database, so the discriminator would be `DATABASE()` and the prefix together. This item stands until that ADR is accepted, and it keeps applying to an installation with no prefix.
+```
+
+The date is the day the note was written. A note that no other ADR prompted leaves out "by ADR", as in `**Corrected 2026-08-17:**`. The later ADR lists the earlier one under Related with what changes in brackets, and its index row says what it narrows, extends or amends.
+
+### While the later ADR is Proposed
+
+| The later ADR is | Label | Wording |
+| :-- | :-- | :-- |
+| `Proposed` | The noun of the label followed by "proposed", such as Narrowing proposed, Extension proposed, Amendment proposed, Clarification proposed or Supersession proposed | "Would", and a closing sentence saying the item stands until that ADR is accepted |
+| `Accepted` | The past tense label | What now holds, with the closing sentence dropped |
+
+Note and Corrected record a fact that is already known, so they have no proposed form. When a `Proposed` ADR is accepted, each of its notes changes from the proposed label to the past tense one, and the closing sentence is dropped.
+
+### Status
+
+Only Superseded changes the status of the earlier ADR, and only when the whole ADR is replaced. The status then reads `Superseded` and the note names the replacing ADR. Every other label leaves the status as it is. `Relocated` is a status value used once, by ADR 0010, for a decision that moved to another repository, and it stays as it is.
+
+### Notes written before this convention
+
+Notes written before 2026-11-14 keep their wording and are not rewritten. For counting or searching them, Scoped reads as Narrowed, Refined as Clarified, Addendum as Note, and a bare "Amended" line inside a bullet as an Amended note. A few notes carry no label, and they are left as they are.
 
 ## Index
 
@@ -88,3 +135,4 @@ Write an ADR when a proposed change or decision:
 | [`0056-filtered-default-order-reads-drive-from-a-full-width-equality-leaf.md`](0056-filtered-default-order-reads-drive-from-a-full-width-equality-leaf.md) | Accepted  | Drives a filtered default-order read from a full-width equality leaf under a pinned join order, bounding discovery for integer, numeric and datetime equality; narrows ADR 0005.   |
 | [`0057-string-slots-are-indexed-through-a-generated-key.md`](0057-string-slots-are-indexed-through-a-generated-key.md) | Accepted  | Replaces the 766-character prefix index on pages built from now on with a stored generated key (a 32-byte weight-string head plus a digest), so a text equality is exact and can start a bounded read. It extends ADR 0056. |
 | [`0058-a-filterable-field-on-an-empty-model-is-born-with-its-slot.md`](0058-a-filterable-field-on-an-empty-model-is-born-with-its-slot.md) | Proposed  | Reserves an indexed slot at registration for a filterable field on a model with no entries, so it is queryable at once; a populated model keeps the lazy path. It would narrow a clarification in ADR 0007. |
+| [`0059-table-names-take-an-optional-installation-prefix.md`](0059-table-names-take-an-optional-installation-prefix.md) | Proposed  | Adds an optional `Config::$tablePrefix` that every table, named constraint, lock name and daemon file carries, so StarDust can share a database with other applications and with a second installation. It would narrow a premise of ADR 0053. |
